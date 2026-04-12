@@ -6,9 +6,43 @@
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export class ApiError extends Error {
+  status: number;
+  detail: string | null;
+
+  constructor(message: string, status: number, detail: string | null = null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function parseErrorDetail(res: Response): Promise<string | null> {
+  const contentType = res.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = await res.json() as { detail?: unknown };
+      if (typeof payload.detail === "string") return payload.detail;
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  try {
+    const text = await res.text();
+    return text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function get<T>(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
+  options?: { suppressErrorStatuses?: number[] },
 ): Promise<T> {
   const url = new URL(BASE + path);
   if (params) {
@@ -20,8 +54,11 @@ async function get<T>(
   const res = await fetch(url.toString(), { cache: "no-store" });
   console.log(`[API] GET ${path} → ${res.status}`);
   if (!res.ok) {
-    console.error(`[API] GET ${path} failed: ${res.status} ${res.statusText}`);
-    throw new Error(`GET ${path} → ${res.status}`);
+    const detail = await parseErrorDetail(res);
+    if (!options?.suppressErrorStatuses?.includes(res.status)) {
+      console.error(`[API] GET ${path} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`);
+    }
+    throw new ApiError(detail ?? `GET ${path} → ${res.status}`, res.status, detail);
   }
   const data = await res.json() as T;
   console.log(`[API] GET ${path} response:`, data);
@@ -37,8 +74,9 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   });
   console.log(`[API] POST ${path} → ${res.status}`);
   if (!res.ok) {
-    console.error(`[API] POST ${path} failed: ${res.status} ${res.statusText}`);
-    throw new Error(`POST ${path} → ${res.status}`);
+    const detail = await parseErrorDetail(res);
+    console.error(`[API] POST ${path} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`);
+    throw new ApiError(detail ?? `POST ${path} → ${res.status}`, res.status, detail);
   }
   const data = await res.json() as T;
   console.log(`[API] POST ${path} response:`, data);
@@ -54,8 +92,9 @@ async function put<T>(path: string, body?: unknown): Promise<T> {
   });
   console.log(`[API] PUT ${path} → ${res.status}`);
   if (!res.ok) {
-    console.error(`[API] PUT ${path} failed: ${res.status} ${res.statusText}`);
-    throw new Error(`PUT ${path} → ${res.status}`);
+    const detail = await parseErrorDetail(res);
+    console.error(`[API] PUT ${path} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`);
+    throw new ApiError(detail ?? `PUT ${path} → ${res.status}`, res.status, detail);
   }
   const data = await res.json() as T;
   console.log(`[API] PUT ${path} response:`, data);
@@ -67,8 +106,9 @@ async function del(path: string): Promise<void> {
   const res = await fetch(BASE + path, { method: "DELETE" });
   console.log(`[API] DELETE ${path} → ${res.status}`);
   if (!res.ok) {
-    console.error(`[API] DELETE ${path} failed: ${res.status} ${res.statusText}`);
-    throw new Error(`DELETE ${path} → ${res.status}`);
+    const detail = await parseErrorDetail(res);
+    console.error(`[API] DELETE ${path} failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`);
+    throw new ApiError(detail ?? `DELETE ${path} → ${res.status}`, res.status, detail);
   }
 }
 
@@ -423,7 +463,7 @@ export interface StockDetailResponse {
 // Backend wire shapes
 // ---------------------------------------------------------------------------
 
-interface ApiActionRow extends Omit<ActionRow, never> {}
+type ApiActionRow = ActionRow;
 
 interface ApiBucketAllocation {
   bucket: Bucket;
@@ -1008,6 +1048,8 @@ export const api = {
       bucket_alloc_momentum: params?.bucket_allocations?.momentum,
       bucket_alloc_quality_momentum: params?.bucket_allocations?.quality_momentum,
       bucket_alloc_dividend_growth: params?.bucket_allocations?.dividend_growth,
+    }, {
+      suppressErrorStatuses: [404],
     }).then(adaptActions),
 
   executeAction: (
@@ -1138,4 +1180,14 @@ export const api = {
     put<ApiSettingsResponse>("/api/settings", toSettingsPayload(body)).then(adaptSettings),
 
   runPipeline: () => post<{ status: string; message: string }>("/api/pipeline/run"),
+
+  kiteStatus: () =>
+    get<{ connected: boolean; token_date: string | null; stale: boolean; api_key_set: boolean }>(
+      "/api/kite/status",
+    ),
+
+  kiteLogin: () => get<{ login_url: string }>("/api/kite/login"),
+
+  kiteSync: () =>
+    post<{ upserted: number; skipped: number; total: number }>("/api/kite/sync"),
 };

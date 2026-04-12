@@ -10,13 +10,13 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from api.deps import get_db
 from api.main import app
+from api.routers import kite as kite_router
 from pipeline.db.base import Base
 from pipeline.db.enums import (
     ActionType,
@@ -35,8 +35,8 @@ from pipeline.db.models import (
     NewsItem,
     RebalanceSnapshot,
     Score,
-    ShockEvent,
     SettingKV,
+    ShockEvent,
     Stock,
     TradeJournalEntry,
 )
@@ -195,6 +195,81 @@ class TestDashboard:
         db.commit()
         r = client.get("/api/dashboard")
         assert r.json()["shock"]["active"] is True
+
+
+# ---------------------------------------------------------------------------
+# Kite
+# ---------------------------------------------------------------------------
+
+class TestKite:
+    def test_status_reads_api_key_from_settings(self, client, monkeypatch):
+        monkeypatch.setattr(kite_router.settings, "kite_api_key", "kite-test-key")
+
+        r = client.get("/api/kite/status")
+
+        assert r.status_code == 200
+        assert r.json()["api_key_set"] is True
+        assert r.json()["connected"] is False
+
+    def test_callback_saves_token_and_syncs_holdings(self, client, db, monkeypatch):
+        stock = Stock(
+            ticker="INFY",
+            country=Country.INDIA,
+            name="Infosys Ltd",
+            sector="Technology",
+            currency="INR",
+        )
+        db.add(stock)
+        db.commit()
+
+        monkeypatch.setattr(kite_router.settings, "kite_api_key", "kite-test-key")
+        monkeypatch.setattr(kite_router.settings, "kite_api_secret", "kite-test-secret")
+        monkeypatch.setattr(kite_router.settings, "frontend_url", "http://localhost:3000")
+
+        class FakeKite:
+            def __init__(self):
+                self.access_token: str | None = None
+
+            def generate_session(self, request_token: str, api_secret: str):
+                assert request_token == "req-token"
+                assert api_secret == "kite-test-secret"
+                return {"access_token": "access-123"}
+
+            def set_access_token(self, access_token: str) -> None:
+                self.access_token = access_token
+
+            def holdings(self):
+                assert self.access_token == "access-123"
+                return [
+                    {"tradingsymbol": "INFY", "quantity": 5, "average_price": 1500.0},
+                    {"tradingsymbol": "SBIN", "quantity": 0, "average_price": 700.0},
+                ]
+
+        monkeypatch.setattr(kite_router, "_get_kite", lambda: FakeKite())
+
+        r = client.get(
+            "/api/kite/callback",
+            params={"request_token": "req-token", "status": "success"},
+            follow_redirects=False,
+        )
+
+        assert r.status_code == 307
+        assert (
+            r.headers["location"]
+            == "http://localhost:3000/settings?kite=connected&synced=1&skipped=1"
+        )
+
+        kv_rows = db.execute(select(SettingKV)).scalars().all()
+        kv = {row.key: row.value for row in kv_rows}
+        assert kv["kite_access_token"] == "access-123"
+        assert kv["kite_token_date"] == str(date.today())
+
+        holding = db.execute(
+            select(Holding).join(Stock).where(Stock.ticker == "INFY", Stock.country == Country.INDIA)
+        ).scalar_one()
+        assert holding.quantity == 5.0
+        assert holding.avg_buy_price == 1500.0
+        assert holding.broker == Broker.KITE
 
 
 # ---------------------------------------------------------------------------

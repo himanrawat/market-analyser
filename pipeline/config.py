@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     fmp_api_key: str = Field(default="", alias="FMP_API_KEY")
     fred_api_key: str = Field(default="", alias="FRED_API_KEY")
     newsapi_key: str = Field(default="", alias="NEWSAPI_KEY")
+    kite_api_key: str = Field(default="", alias="KITE_API_KEY")
+    kite_api_secret: str = Field(default="", alias="KITE_API_SECRET")
 
     # Notifications
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
@@ -38,6 +40,7 @@ class Settings(BaseSettings):
     # Runtime
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     environment: str = Field(default="development", alias="ENVIRONMENT")
+    frontend_url: str = Field(default="http://localhost:3000", alias="FRONTEND_URL")
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

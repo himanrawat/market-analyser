@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useDeferredValue, useEffect, useState } from "react";
-import { api, ActionsResponse, ActionRow, Bucket } from "@/lib/api";
+import { api, ActionsResponse, ActionRow, ApiError, Bucket } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -70,6 +70,7 @@ export default function ActionsPage() {
   const [lesson, setLesson] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [emptyStateMessage, setEmptyStateMessage] = useState<string | null>(null);
 
   const deferredFreshCapital = useDeferredValue(freshCapital);
   const deferredSellProceeds = useDeferredValue(sellProceeds);
@@ -77,6 +78,7 @@ export default function ActionsPage() {
 
   const load = useCallback(() => {
     setLoading(true);
+    setEmptyStateMessage(null);
     api
       .actions({
         fresh_capital: deferredFreshCapital,
@@ -89,7 +91,17 @@ export default function ActionsPage() {
         setData(d);
       })
       .catch((err) => {
+        if (
+          err instanceof ApiError
+          && err.status === 404
+          && (err.detail ?? "").includes("No rebalance snapshot found")
+        ) {
+          setData(null);
+          setEmptyStateMessage("No action data yet. Run the pipeline first to create the monthly rebalance snapshot.");
+          return;
+        }
         console.error("[Actions] fetch error:", err);
+        setEmptyStateMessage("Could not load actions. Check that the API is running and try again.");
         setData(null);
       })
       .finally(() => setLoading(false));
@@ -179,7 +191,9 @@ export default function ActionsPage() {
       <div className="space-y-4">
         <h1 className="text-xl font-semibold text-slate-100">Actions</h1>
         <p className="text-slate-500 text-sm">
-          No action data. Run the pipeline first:{" "}
+          {emptyStateMessage ?? "No action data."}{" "}
+          <br />
+          Run the pipeline first:{" "}
           <code className="text-slate-400">python -m pipeline.cli run</code>
         </p>
       </div>

@@ -20,6 +20,7 @@ from api.routers import (
     actions,
     dashboard,
     journal,
+    kite,
     news,
     pipeline,
     portfolio,
@@ -59,6 +60,7 @@ app.add_middleware(
 
 # Register all routers
 app.include_router(dashboard.router)
+app.include_router(kite.router)
 app.include_router(ranked.router)
 app.include_router(actions.router)
 app.include_router(stocks.router)

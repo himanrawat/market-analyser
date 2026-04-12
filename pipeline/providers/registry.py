@@ -90,8 +90,11 @@ class _FundamentalService:
     ) -> list[FundamentalSnapshot]:
         try:
             return self._fmp.get_quarterly_fundamentals(ticker, country, limit)
-        except (MissingApiKeyError, SymbolNotFoundError):
-            logger.warning("FMP key missing — falling back to yfinance for fundamentals")
+        except MissingApiKeyError:
+            logger.warning("FMP API key not configured — falling back to yfinance for fundamentals")
+            return self._yf.get_quarterly_fundamentals(ticker, country, limit)
+        except SymbolNotFoundError:
+            logger.debug(f"FMP symbol not found for {ticker} fundamentals — falling back to yfinance")
             return self._yf.get_quarterly_fundamentals(ticker, country, limit)
         except PlanLimitError:
             logger.debug(f"FMP plan limit for {ticker} fundamentals — falling back to yfinance")
@@ -100,8 +103,11 @@ class _FundamentalService:
     def get_profile(self, ticker: str, country: Country) -> StockProfile:
         try:
             return self._fmp.get_profile(ticker, country)
-        except (MissingApiKeyError, SymbolNotFoundError):
-            logger.warning("FMP key missing — falling back to yfinance for profile")
+        except MissingApiKeyError:
+            logger.warning("FMP API key not configured — falling back to yfinance for profile")
+            return self._yf.get_profile(ticker, country)
+        except SymbolNotFoundError:
+            logger.debug(f"FMP symbol not found for {ticker} profile — falling back to yfinance")
             return self._yf.get_profile(ticker, country)
         except PlanLimitError:
             logger.debug(f"FMP plan limit for {ticker} profile — falling back to yfinance")
