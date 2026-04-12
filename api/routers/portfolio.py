@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,6 +33,7 @@ router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
 @router.get("", response_model=PortfolioResponse)
 def get_portfolio(db: Session = Depends(get_db)) -> PortfolioResponse:
+    logger.info("GET /api/portfolio")
     holdings = db.execute(
         select(Holding).options(selectinload(Holding.stock))
     ).scalars().all()
@@ -40,11 +42,13 @@ def get_portfolio(db: Session = Depends(get_db)) -> PortfolioResponse:
     rows = [_build_row(h, price_map) for h in holdings]
     summary = _build_summary(rows)
 
+    logger.info(f"portfolio → holdings={len(holdings)} prices_loaded={len(price_map)}/{len(holdings)} total_value={summary.total_value:.2f}")
     return PortfolioResponse(holdings=rows, summary=summary)
 
 
 @router.post("/holdings", status_code=201, response_model=HoldingRow)
 def add_holding(body: AddHoldingRequest, db: Session = Depends(get_db)) -> HoldingRow:
+    logger.info(f"POST /api/portfolio/holdings ticker={body.ticker} country={body.country} qty={body.qty} avg_buy_price={body.avg_buy_price}")
     stock = db.execute(
         select(Stock).where(
             Stock.ticker == body.ticker.upper(),
@@ -84,6 +88,7 @@ def update_holding(
     body: UpdateHoldingRequest,
     db: Session = Depends(get_db),
 ) -> HoldingRow:
+    logger.info(f"PUT /api/portfolio/holdings/{holding_id} qty={body.qty} avg_buy_price={body.avg_buy_price} buy_date={body.buy_date}")
     holding = db.get(Holding, holding_id)
     if holding is None:
         raise HTTPException(status_code=404, detail="Holding not found")
@@ -103,6 +108,7 @@ def update_holding(
 
 @router.delete("/holdings/{holding_id}", status_code=204)
 def delete_holding(holding_id: int, db: Session = Depends(get_db)) -> None:
+    logger.info(f"DELETE /api/portfolio/holdings/{holding_id}")
     holding = db.get(Holding, holding_id)
     if holding is None:
         raise HTTPException(status_code=404, detail="Holding not found")

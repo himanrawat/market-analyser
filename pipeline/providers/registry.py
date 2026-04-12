@@ -38,6 +38,7 @@ from pipeline.providers.dto import (
     StockProfile,
 )
 from pipeline.providers.errors import DataProviderError, MissingApiKeyError, PlanLimitError
+from pipeline.providers.errors import SymbolNotFoundError
 from pipeline.providers.fmp_provider import FMPProvider
 from pipeline.providers.fred_provider import FREDProvider
 from pipeline.providers.newsapi_provider import NewsAPIProvider
@@ -89,7 +90,7 @@ class _FundamentalService:
     ) -> list[FundamentalSnapshot]:
         try:
             return self._fmp.get_quarterly_fundamentals(ticker, country, limit)
-        except MissingApiKeyError:
+        except (MissingApiKeyError, SymbolNotFoundError):
             logger.warning("FMP key missing — falling back to yfinance for fundamentals")
             return self._yf.get_quarterly_fundamentals(ticker, country, limit)
         except PlanLimitError:
@@ -99,7 +100,7 @@ class _FundamentalService:
     def get_profile(self, ticker: str, country: Country) -> StockProfile:
         try:
             return self._fmp.get_profile(ticker, country)
-        except MissingApiKeyError:
+        except (MissingApiKeyError, SymbolNotFoundError):
             logger.warning("FMP key missing — falling back to yfinance for profile")
             return self._yf.get_profile(ticker, country)
         except PlanLimitError:

@@ -16,34 +16,60 @@ async function get<T>(
       if (v !== undefined) url.searchParams.set(k, String(v));
     });
   }
+  console.log(`[API] GET ${url.toString()}`);
   const res = await fetch(url.toString(), { cache: "no-store" });
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
-  return res.json();
+  console.log(`[API] GET ${path} → ${res.status}`);
+  if (!res.ok) {
+    console.error(`[API] GET ${path} failed: ${res.status} ${res.statusText}`);
+    throw new Error(`GET ${path} → ${res.status}`);
+  }
+  const data = await res.json() as T;
+  console.log(`[API] GET ${path} response:`, data);
+  return data;
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
+  console.log(`[API] POST ${BASE + path}`, body ?? "");
   const res = await fetch(BASE + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}`);
-  return res.json();
+  console.log(`[API] POST ${path} → ${res.status}`);
+  if (!res.ok) {
+    console.error(`[API] POST ${path} failed: ${res.status} ${res.statusText}`);
+    throw new Error(`POST ${path} → ${res.status}`);
+  }
+  const data = await res.json() as T;
+  console.log(`[API] POST ${path} response:`, data);
+  return data;
 }
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
+  console.log(`[API] PUT ${BASE + path}`, body ?? "");
   const res = await fetch(BASE + path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`PUT ${path} → ${res.status}`);
-  return res.json();
+  console.log(`[API] PUT ${path} → ${res.status}`);
+  if (!res.ok) {
+    console.error(`[API] PUT ${path} failed: ${res.status} ${res.statusText}`);
+    throw new Error(`PUT ${path} → ${res.status}`);
+  }
+  const data = await res.json() as T;
+  console.log(`[API] PUT ${path} response:`, data);
+  return data;
 }
 
 async function del(path: string): Promise<void> {
+  console.log(`[API] DELETE ${BASE + path}`);
   const res = await fetch(BASE + path, { method: "DELETE" });
-  if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}`);
+  console.log(`[API] DELETE ${path} → ${res.status}`);
+  if (!res.ok) {
+    console.error(`[API] DELETE ${path} failed: ${res.status} ${res.statusText}`);
+    throw new Error(`DELETE ${path} → ${res.status}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +380,36 @@ export interface StockDetailResponse {
   plain_english: string | null;
   news: NewsArticle[];
   events: { event_type: string; event_date: string; description: string | null }[];
+  forecasts: {
+    analyst_count: number | null;
+    buy_count: number | null;
+    hold_count: number | null;
+    sell_count: number | null;
+    target_high: number | null;
+    target_low: number | null;
+    target_avg: number | null;
+    current_price: number | null;
+    consensus_rating: string | null;
+    availability: string | null;
+    note: string | null;
+    quarterly_estimates: {
+      period: string;
+      fiscal_date: string | null;
+      eps_estimate: number | null;
+      revenue_estimate: number | null;
+      analyst_count: number | null;
+    }[];
+  } | null;
+  peers: {
+    ticker: string;
+    company_name: string | null;
+    pe_ratio: number | null;
+    roe: number | null;
+    growth_rate: number | null;
+    market_cap: number | null;
+    bucket_membership: Bucket[];
+  }[];
+  peers_note: string | null;
   holding: HoldingRow | null;
   sentiment: {
     positive: number;
@@ -458,10 +514,69 @@ interface ApiSettingsResponse {
   bucket_allocations: ApiSettingsBucketWeight[];
   rebalance_day: number;
   telegram_enabled: boolean;
+  email_enabled: boolean;
   stock_news_enabled: boolean;
   shock_detection_enabled: boolean;
   universe_nifty: string;
   universe_sp: string;
+}
+
+interface ApiRankedStock {
+  ticker: string;
+  country: Country;
+  bucket: Bucket;
+  rank: number;
+  score: number;
+  qualified: boolean;
+  is_actionable: boolean;
+  factor_scores: Record<string, number>;
+  reason: string;
+  company_name: string | null;
+  sector: string | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  pb_ratio: number | null;
+  dividend_yield: number | null;
+}
+
+interface ApiBucketList {
+  bucket: Bucket;
+  country: Country;
+  picks_per_bucket: number;
+  ranked: ApiRankedStock[];
+  extended: ApiRankedStock[];
+}
+
+interface ApiRankedResponse {
+  lists: ApiBucketList[];
+  run_date: string | null;
+}
+
+interface ApiNewsArticle {
+  id: number;
+  ticker: string | null;
+  headline: string;
+  source: string;
+  url: string | null;
+  published_at: string | null;
+  sentiment: string | null;
+  category: string | null;
+}
+
+interface ApiNewsFeedResponse {
+  articles: ApiNewsArticle[];
+  total: number;
+}
+
+interface ApiShockStatusResponse {
+  active: boolean;
+  current_event: {
+    id: number;
+    triggered_at: string;
+    banner: ShockBanner;
+    headline: string;
+    dismissed_until: string | null;
+  } | null;
 }
 
 interface ApiStockDetailResponse {
@@ -469,6 +584,7 @@ interface ApiStockDetailResponse {
   country: Country;
   company_name: string | null;
   sector: string | null;
+  description: string | null;
   market_cap: number | null;
   current_price: number | null;
   fundamentals: {
@@ -485,6 +601,36 @@ interface ApiStockDetailResponse {
     negative_count: number;
     avg_compound: number | null;
   } | null;
+  forecasts: {
+    analyst_count: number | null;
+    buy_count: number | null;
+    hold_count: number | null;
+    sell_count: number | null;
+    target_high: number | null;
+    target_low: number | null;
+    target_avg: number | null;
+    current_price: number | null;
+    consensus_rating: string | null;
+    availability: string | null;
+    note: string | null;
+    quarterly_estimates: {
+      period: string;
+      fiscal_date: string | null;
+      eps_estimate: number | null;
+      revenue_estimate: number | null;
+      analyst_count: number | null;
+    }[];
+  } | null;
+  peers: {
+    ticker: string;
+    company_name: string | null;
+    pe_ratio: number | null;
+    roe: number | null;
+    growth_rate: number | null;
+    market_cap: number | null;
+    bucket_membership: Bucket[];
+  }[];
+  peers_note: string | null;
   holding: {
     qty: number;
     avg_buy_price: number;
@@ -566,6 +712,42 @@ function adaptActions(response: ApiActionsResponse): ActionsResponse {
   };
 }
 
+function adaptRankedStock(stock: ApiRankedStock): RankedStock {
+  return {
+    ticker: stock.ticker,
+    name: stock.company_name ?? stock.ticker,
+    sector: stock.sector,
+    country: stock.country,
+    score: stock.score,
+    rank: stock.rank,
+    is_actionable: stock.is_actionable,
+    action: null,
+    pe_ratio: stock.pe_ratio,
+    pb_ratio: stock.pb_ratio,
+    dividend_yield: stock.dividend_yield,
+    market_cap: stock.market_cap,
+    reason: stock.reason,
+    bucket_flags: stock.qualified ? [stock.bucket] : [],
+    sector_tilt: null,
+  };
+}
+
+function adaptRanked(response: ApiRankedResponse): RankedResponse {
+  return {
+    run_date: response.run_date,
+    lists: response.lists.map((list) => ({
+      bucket: list.bucket,
+      country: list.country,
+      run_date: response.run_date,
+      picks: list.picks_per_bucket,
+      actionable: list.ranked.map(adaptRankedStock),
+      extended: list.extended.map(adaptRankedStock),
+      showing: list.ranked.length,
+      total: list.ranked.length + list.extended.length,
+    })),
+  };
+}
+
 function adaptHolding(row: ApiHoldingRow): HoldingRow {
   return {
     id: row.id,
@@ -606,6 +788,33 @@ function adaptPortfolio(response: ApiPortfolioResponse): PortfolioResponse {
   };
 }
 
+function adaptNews(response: ApiNewsFeedResponse): NewsFeedResponse {
+  return {
+    items: response.articles.map((article) => ({
+      id: article.id,
+      ticker: article.ticker,
+      headline: article.headline,
+      source: article.source,
+      url: article.url,
+      published_at: article.published_at ?? "",
+      sentiment: (article.sentiment?.toLowerCase() as "positive" | "neutral" | "negative") ?? "neutral",
+      category: article.category,
+      stream: article.ticker ? "stock" : "general",
+    })),
+    total: response.total,
+  };
+}
+
+function adaptShock(response: ApiShockStatusResponse): ShockBannerStatus {
+  return {
+    active: response.active,
+    banner: response.current_event?.banner ?? null,
+    headline: response.current_event?.headline ?? null,
+    triggered_at: response.current_event?.triggered_at ?? null,
+    dismissed_until: response.current_event?.dismissed_until ?? null,
+  };
+}
+
 function adaptJournalEntry(entry: ApiJournalEntry): JournalEntry {
   return {
     id: entry.id,
@@ -641,7 +850,7 @@ function adaptSettings(response: ApiSettingsResponse): SettingsResponse {
     universe_india: response.universe_nifty,
     universe_us: response.universe_sp,
     notify_telegram: response.telegram_enabled,
-    notify_email: false,
+    notify_email: response.email_enabled,
     shock_detection: response.shock_detection_enabled,
     stock_news: response.stock_news_enabled,
     bucket_allocations: bucketAllocations,
@@ -650,6 +859,15 @@ function adaptSettings(response: ApiSettingsResponse): SettingsResponse {
 }
 
 function adaptStock(response: ApiStockDetailResponse): StockDetailResponse {
+  const week52High =
+    response.price_history.length > 0
+      ? Math.max(...response.price_history.map((point) => point.close))
+      : null;
+  const week52Low =
+    response.price_history.length > 0
+      ? Math.min(...response.price_history.map((point) => point.close))
+      : null;
+
   return {
     ticker: response.ticker,
     name: response.company_name ?? response.ticker,
@@ -657,9 +875,9 @@ function adaptStock(response: ApiStockDetailResponse): StockDetailResponse {
     sector: response.sector,
     market_cap: response.market_cap,
     current_price: response.current_price,
-    week_52_high: null,
-    week_52_low: null,
-    description: null,
+    week_52_high: week52High,
+    week_52_low: week52Low,
+    description: response.description,
     fundamentals: response.fundamentals
       ? {
           pe_ratio: response.fundamentals.pe_ratio,
@@ -705,6 +923,9 @@ function adaptStock(response: ApiStockDetailResponse): StockDetailResponse {
       event_date: event.event_date ?? "",
       description: event.description,
     })),
+    forecasts: response.forecasts,
+    peers: response.peers,
+    peers_note: response.peers_note,
     holding: response.holding
       ? {
           id: 0,
@@ -750,6 +971,7 @@ function toSettingsPayload(settings: Partial<SettingsResponse>) {
     picks_per_bucket: settings.picks_per_bucket,
     rebalance_day: settings.rebalance_day,
     telegram_enabled: settings.notify_telegram,
+    email_enabled: settings.notify_email,
     stock_news_enabled: settings.stock_news,
     shock_detection_enabled: settings.shock_detection,
     universe_nifty: settings.universe_india,
@@ -772,7 +994,7 @@ export const api = {
     pe_sort?: string;
     pb_sort?: string;
     picks?: number;
-  }) => get<RankedResponse>("/api/ranked", params),
+  }) => get<ApiRankedResponse>("/api/ranked", params).then(adaptRanked),
 
   actions: (params?: {
     fresh_capital?: number;
@@ -855,11 +1077,16 @@ export const api = {
     stream?: string;
     limit?: number;
     offset?: number;
-  }) => get<NewsFeedResponse>("/api/news", params),
+  }) =>
+    get<ApiNewsFeedResponse>("/api/news", {
+      ...params,
+      category: params?.category?.toLowerCase(),
+    }).then(adaptNews),
 
-  shock: () => get<ShockBannerStatus>("/api/shock"),
+  shock: () => get<ApiShockStatusResponse>("/api/shock").then(adaptShock),
 
-  dismissShock: (id: number) => post<void>(`/api/shock/${id}/dismiss`),
+  dismissShock: (id: number) =>
+    post<{ id: number; dismissed_until: string }>(`/api/shock/${id}/dismiss`),
 
   journal: (params?: { limit?: number; offset?: number }) =>
     get<ApiJournalEntry[]>("/api/journal", params).then((entries) => entries.map(adaptJournalEntry)),
@@ -910,5 +1137,5 @@ export const api = {
   saveSettings: (body: Partial<SettingsResponse>) =>
     put<ApiSettingsResponse>("/api/settings", toSettingsPayload(body)).then(adaptSettings),
 
-  runPipeline: () => post<{ task_id: string }>("/api/pipeline/run"),
+  runPipeline: () => post<{ status: string; message: string }>("/api/pipeline/run"),
 };

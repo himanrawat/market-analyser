@@ -83,8 +83,15 @@ export default function ActionsPage() {
         sell_proceeds: deferredSellProceeds,
         bucket_allocations: deferredAlloc,
       })
-      .then(setData)
-      .catch(() => setData(null))
+      .then((d) => {
+        console.log(`[Actions] received run_date=${d.run_date} regime=${d.macro_regime} shock=${d.shock_regime} rows=${d.rows.length}`);
+        d.rows.forEach((r) => console.log(`[Actions]   ${r.action} ${r.ticker} bucket=${r.bucket} score=${r.score} rank=${r.rank}`));
+        setData(d);
+      })
+      .catch((err) => {
+        console.error("[Actions] fetch error:", err);
+        setData(null);
+      })
       .finally(() => setLoading(false));
   }, [deferredAlloc, deferredFreshCapital, deferredSellProceeds]);
 

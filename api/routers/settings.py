@@ -6,6 +6,7 @@ PUT /api/settings     — update one or more settings
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ _KEYS = {
     "picks_per_bucket": 10,
     "rebalance_day": 7,
     "telegram_enabled": False,
+    "email_enabled": False,
     "stock_news_enabled": True,
     "shock_detection_enabled": True,
     "universe_nifty": "nifty500",
@@ -34,6 +36,7 @@ _KEYS = {
 
 @router.get("", response_model=SettingsResponse)
 def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
+    logger.info("GET /api/settings")
     kv = _load_all(db)
     return SettingsResponse(
         picks_per_bucket=int(kv.get("picks_per_bucket", 10)),
@@ -45,6 +48,7 @@ def get_settings(db: Session = Depends(get_db)) -> SettingsResponse:
         ],
         rebalance_day=int(kv.get("rebalance_day", 7)),
         telegram_enabled=_bool(kv.get("telegram_enabled", False)),
+        email_enabled=_bool(kv.get("email_enabled", False)),
         stock_news_enabled=_bool(kv.get("stock_news_enabled", True)),
         shock_detection_enabled=_bool(kv.get("shock_detection_enabled", True)),
         universe_nifty=str(kv.get("universe_nifty", "nifty500")),
@@ -57,6 +61,7 @@ def update_settings(
     body: UpdateSettingsRequest,
     db: Session = Depends(get_db),
 ) -> SettingsResponse:
+    logger.info("PUT /api/settings")
     updates: dict[str, str] = {}
 
     if body.picks_per_bucket is not None:
@@ -65,6 +70,8 @@ def update_settings(
         updates["rebalance_day"] = str(body.rebalance_day)
     if body.telegram_enabled is not None:
         updates["telegram_enabled"] = str(body.telegram_enabled)
+    if body.email_enabled is not None:
+        updates["email_enabled"] = str(body.email_enabled)
     if body.stock_news_enabled is not None:
         updates["stock_news_enabled"] = str(body.stock_news_enabled)
     if body.shock_detection_enabled is not None:
@@ -85,6 +92,7 @@ def update_settings(
             if key:
                 updates[key] = str(bw.allocation_pct)
 
+    logger.info(f"settings update → keys={list(updates.keys())}")
     _save_all(db, updates)
     return get_settings(db)
 

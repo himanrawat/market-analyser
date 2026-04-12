@@ -36,9 +36,15 @@ export default function StockDetailPage() {
 
   useEffect(() => {
     if (ticker) {
+      console.log(`[Stock/${ticker}] fetching`);
       api
         .stock(ticker)
-        .then(setStock)
+        .then((s) => {
+          console.log(`[Stock/${ticker}] received:`, s);
+          console.log(`[Stock/${ticker}] price=${s.current_price} fundamentals=${s.fundamentals ? "yes" : "null"} scores=${s.scores.length} price_history=${s.price_history.length}`);
+          setStock(s);
+        })
+        .catch((err) => console.error(`[Stock/${ticker}] fetch error:`, err))
         .finally(() => setLoading(false));
     }
   }, [ticker]);
@@ -100,7 +106,7 @@ export default function StockDetailPage() {
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
         <TabsList className="bg-slate-900 border-b border-slate-800 rounded-none h-auto p-0 w-full justify-start gap-0">
-          {["overview", "score", "chart", "news", "events", "holding", "sentiment"].map((tab) => (
+          {["overview", "score", "chart", "news", "events", "holding", "sentiment", "forecasts", "peers"].map((tab) => (
             <TabsTrigger
               key={tab}
               value={tab}
@@ -333,6 +339,155 @@ export default function StockDetailPage() {
             </div>
           ) : (
             <p className="text-slate-500 text-sm">No sentiment data.</p>
+          )}
+        </TabsContent>
+
+        {/* Forecasts */}
+        <TabsContent value="forecasts" className="mt-4">
+          {stock.forecasts ? (
+            <div className="space-y-4">
+              {stock.forecasts.note && (
+                <Card className="bg-amber-950/30 border-amber-900/40">
+                  <CardContent className="px-4 py-3 text-sm text-amber-200">
+                    {stock.forecasts.note}
+                  </CardContent>
+                </Card>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                  { label: "Analysts", value: stock.forecasts.analyst_count != null ? String(stock.forecasts.analyst_count) : "—" },
+                  { label: "Buy", value: stock.forecasts.buy_count != null ? String(stock.forecasts.buy_count) : "—" },
+                  { label: "Hold", value: stock.forecasts.hold_count != null ? String(stock.forecasts.hold_count) : "—" },
+                  { label: "Sell", value: stock.forecasts.sell_count != null ? String(stock.forecasts.sell_count) : "—" },
+                  { label: "Target High", value: stock.forecasts.target_high != null ? fmtNum(stock.forecasts.target_high, 2) : "—" },
+                  { label: "Target Avg", value: stock.forecasts.target_avg != null ? fmtNum(stock.forecasts.target_avg, 2) : "—" },
+                  { label: "Target Low", value: stock.forecasts.target_low != null ? fmtNum(stock.forecasts.target_low, 2) : "—" },
+                  { label: "Current Price", value: stock.forecasts.current_price != null ? fmtNum(stock.forecasts.current_price, 2) : "—" },
+                  { label: "Consensus", value: stock.forecasts.consensus_rating ?? "—" },
+                  { label: "Source", value: stock.forecasts.availability ?? "—" },
+                ].map(({ label, value }) => (
+                  <Card key={label} className="bg-slate-900 border-slate-800">
+                    <CardContent className="px-4 py-3">
+                      <p className="text-xs text-slate-500">{label}</p>
+                      <p className="text-base font-mono text-slate-100 mt-0.5">{value}</p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+              <Card className="bg-slate-900 border-slate-800">
+                <CardHeader className="px-4 pt-4 pb-2">
+                  <CardTitle className="text-xs text-slate-500 font-normal">Next Quarterly EPS Estimates</CardTitle>
+                </CardHeader>
+                <CardContent className="px-4 pb-4">
+                  {stock.forecasts.quarterly_estimates.length === 0 ? (
+                    <p className="text-slate-500 text-sm">No forward EPS estimates were returned.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {stock.forecasts.quarterly_estimates.map((estimate) => (
+                        <div
+                          key={`${estimate.period}-${estimate.fiscal_date ?? "na"}`}
+                          className="grid grid-cols-2 md:grid-cols-5 gap-2 py-2 border-b border-slate-800 last:border-0"
+                        >
+                          <span className="text-xs text-slate-400">{estimate.period}</span>
+                          <span className="text-xs text-slate-500">{estimate.fiscal_date ? fmtDate(estimate.fiscal_date) : "—"}</span>
+                          <span className="text-xs font-mono text-slate-300">
+                            EPS {estimate.eps_estimate != null ? fmtNum(estimate.eps_estimate, 2) : "—"}
+                          </span>
+                          <span className="text-xs font-mono text-slate-300">
+                            Rev {estimate.revenue_estimate != null ? fmtNum(estimate.revenue_estimate, 0) : "—"}
+                          </span>
+                          <span className="text-xs text-slate-500">
+                            {estimate.analyst_count != null ? `${estimate.analyst_count} analysts` : "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <p className="text-slate-500 text-sm">No analyst forecast data stored for this stock yet.</p>
+          )}
+        </TabsContent>
+
+        {/* Peers */}
+        <TabsContent value="peers" className="mt-4">
+          {stock.peers.length === 0 ? (
+            <p className="text-slate-500 text-sm">No peer comparison available yet.</p>
+          ) : (
+            <div className="space-y-4">
+              {stock.peers_note && (
+                <Card className="bg-slate-950 border-slate-800">
+                  <CardContent className="px-4 py-3 text-sm text-slate-400">
+                    {stock.peers_note}
+                  </CardContent>
+                </Card>
+              )}
+              <Card className="bg-slate-900 border-slate-800">
+                <CardContent className="p-0">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-600">
+                        <th className="text-left px-4 py-2.5 font-normal">Ticker</th>
+                        <th className="text-right px-4 py-2.5 font-normal">P/E</th>
+                        <th className="text-right px-4 py-2.5 font-normal">ROE</th>
+                        <th className="text-right px-4 py-2.5 font-normal">Growth</th>
+                        <th className="text-right px-4 py-2.5 font-normal">Market Cap</th>
+                        <th className="text-left px-4 py-2.5 font-normal">Buckets</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stock.peers.map((peer) => (
+                        <tr key={peer.ticker} className="border-b border-slate-800/40 last:border-0">
+                          <td className="px-4 py-2.5">
+                            <a href={`/stocks/${peer.ticker}`} className="text-indigo-400 hover:text-indigo-300 font-mono font-medium">
+                              {peer.ticker}
+                            </a>
+                            {peer.company_name && (
+                              <span className="ml-2 text-slate-600">{peer.company_name}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-300">
+                            {peer.pe_ratio != null ? fmtNum(peer.pe_ratio, 1) : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-300">
+                            {peer.roe != null ? `${fmtNum(peer.roe, 1)}%` : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-300">
+                            {peer.growth_rate != null ? `${fmtNum(peer.growth_rate, 1)}%` : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-300">
+                            {peer.market_cap != null
+                              ? stock.country === "IN"
+                                ? fmtINR(peer.market_cap)
+                                : `$${(peer.market_cap / 1e9).toFixed(1)}B`
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {peer.bucket_membership.length > 0 ? (
+                                peer.bucket_membership.map((bucket) => (
+                                  <Badge
+                                    key={`${peer.ticker}-${bucket}`}
+                                    variant="outline"
+                                    className="border-slate-700 text-slate-400 text-[10px]"
+                                  >
+                                    {bucketLabel(bucket)}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+            </div>
           )}
         </TabsContent>
       </Tabs>

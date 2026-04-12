@@ -5,7 +5,6 @@ description = "Personal stock picker & monthly rebalance tool for Nifty 500 + S&
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.2.0",
-    "pandas-ta>=0.3.14b",
     "numpy>=1.26.0",
     "yfinance>=0.2.40",
     "fredapi>=0.5.2",
@@ -56,6 +55,5 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
 markers = ["live: requires real network and API keys (deselected by default)"]
 addopts = "-m 'not live'"

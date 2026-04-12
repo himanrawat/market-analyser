@@ -63,9 +63,14 @@ export default function RankedPage() {
         picks,
       })
       .then((r) => {
+        console.log(`[Ranked] received run_date=${r.run_date} lists=${r.lists.length}`);
+        r.lists.forEach((l) =>
+          console.log(`[Ranked]   ${l.bucket}/${l.country} actionable=${l.actionable.length} extended=${l.extended.length}`)
+        );
         setLists(r.lists);
         setRunDate(r.run_date);
       })
+      .catch((err) => console.error("[Ranked] fetch error:", err))
       .finally(() => setLoading(false));
   }, [bucket, country, sort, picks]);
 

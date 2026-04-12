@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -32,12 +33,15 @@ def get_ranked(
 ) -> RankedResponse:
     """Return ranked lists from the most recent rebalance snapshot."""
 
+    logger.info(f"GET /api/ranked bucket={bucket!r} country={country!r} sector={sector!r} picks={picks}")
+
     # Latest snapshot
     snapshot = db.execute(
         select(RebalanceSnapshot).order_by(RebalanceSnapshot.run_date.desc()).limit(1)
     ).scalar_one_or_none()
 
     if snapshot is None:
+        logger.warning("ranked: no rebalance snapshot found — returning empty lists")
         return RankedResponse(lists=[], run_date=None)
 
     # Filter buckets/countries
@@ -89,6 +93,9 @@ def get_ranked(
                 notes=[],
             ))
 
+    total_actionable = sum(len(lst.ranked) for lst in lists)
+    total_extended = sum(len(lst.extended) for lst in lists)
+    logger.info(f"ranked → snapshot={snapshot.run_date} lists={len(lists)} actionable={total_actionable} extended={total_extended}")
     return RankedResponse(
         lists=lists,
         run_date=str(snapshot.run_date),

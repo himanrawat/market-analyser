@@ -18,6 +18,7 @@ class SettingsResponse(BaseModel):
     bucket_allocations: list[BucketWeight]    # must sum to 100
     rebalance_day: int                        # default 7
     telegram_enabled: bool
+    email_enabled: bool
     stock_news_enabled: bool
     shock_detection_enabled: bool
     universe_nifty: str                       # "nifty50" | "nifty500"
@@ -29,6 +30,7 @@ class UpdateSettingsRequest(BaseModel):
     bucket_allocations: Optional[list[BucketWeight]] = None
     rebalance_day: Optional[int] = None
     telegram_enabled: Optional[bool] = None
+    email_enabled: Optional[bool] = None
     stock_news_enabled: Optional[bool] = None
     shock_detection_enabled: Optional[bool] = None
     universe_nifty: Optional[str] = None

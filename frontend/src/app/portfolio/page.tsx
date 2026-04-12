@@ -40,7 +40,14 @@ export default function PortfolioPage() {
   });
 
   function reload() {
-    api.portfolio().then(setData).finally(() => setLoading(false));
+    api
+      .portfolio()
+      .then((d) => {
+        console.log(`[Portfolio] received holdings=${d.holdings.length} total_value=${d.summary.total_value}`);
+        setData(d);
+      })
+      .catch((err) => console.error("[Portfolio] fetch error:", err))
+      .finally(() => setLoading(false));
   }
 
   useEffect(() => {

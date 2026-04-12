@@ -31,7 +31,14 @@ export default function SettingsPage() {
   const [pipelineMsg, setPipelineMsg] = useState("");
 
   useEffect(() => {
-    api.settings().then(setSettings).finally(() => setLoading(false));
+    api
+      .settings()
+      .then((s) => {
+        console.log("[Settings] received:", s);
+        setSettings(s);
+      })
+      .catch((err) => console.error("[Settings] fetch error:", err))
+      .finally(() => setLoading(false));
   }, []);
 
   async function handleSave() {
@@ -52,7 +59,7 @@ export default function SettingsPage() {
     setPipelineMsg("Pipeline started…");
     try {
       const res = await api.runPipeline();
-      setPipelineMsg(`Pipeline queued (task: ${res.task_id}). Check logs for progress.`);
+      setPipelineMsg(res.message);
     } catch {
       setPipelineMsg("Failed to start pipeline. Is the API running?");
     } finally {

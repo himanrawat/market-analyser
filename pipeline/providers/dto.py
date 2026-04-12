@@ -93,6 +93,33 @@ class EventRecord(_Base):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+class QuarterlyEstimate(_Base):
+    """Forward analyst estimate for a fiscal period."""
+
+    period: str
+    fiscal_date: date | None = None
+    eps_estimate: float | None = None
+    revenue_estimate: float | None = None
+    analyst_count: int | None = None
+
+
+class AnalystForecastSnapshot(_Base):
+    """Aggregated analyst target / rating / EPS estimate summary."""
+
+    ticker: str
+    country: Country
+    analyst_count: int | None = None
+    buy_count: int | None = None
+    hold_count: int | None = None
+    sell_count: int | None = None
+    target_high: float | None = None
+    target_low: float | None = None
+    target_avg: float | None = None
+    current_price: float | None = None
+    consensus_rating: str | None = None
+    quarterly_estimates: list[QuarterlyEstimate] = Field(default_factory=list)
+
+
 class MacroReading(_Base):
     """One (date, value) data point for a named macro series."""
 

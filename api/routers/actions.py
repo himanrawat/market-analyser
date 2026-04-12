@@ -12,6 +12,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -55,11 +56,14 @@ def get_actions(
 ) -> ActionsResponse:
     """Return the portfolio diff from the most recent rebalance snapshot."""
 
+    logger.info(f"GET /api/actions fresh_capital={fresh_capital} sell_proceeds={sell_proceeds}")
+
     snapshot = db.execute(
         select(RebalanceSnapshot).order_by(RebalanceSnapshot.run_date.desc()).limit(1)
     ).scalar_one_or_none()
 
     if snapshot is None:
+        logger.warning("actions: no rebalance snapshot found")
         raise HTTPException(status_code=404, detail="No rebalance snapshot found. Run the pipeline first.")
 
     # Re-run diff from stored snapshot data (avoids re-scoring)
@@ -122,6 +126,7 @@ def get_actions(
             undeployed=deployment.undeployed,
         )
 
+    logger.info(f"actions → snapshot={snapshot.run_date} buys={len(buys)} sells={len(sells)} adds={len(adds)} holds={len(holds)}")
     return ActionsResponse(
         run_date=snapshot.run_date,
         macro_regime=snapshot.macro_regime,
@@ -141,6 +146,7 @@ def execute_action(
     db: Session = Depends(get_db),
 ) -> dict:
     """Mark an action as executed and create a trade journal entry."""
+    logger.info(f"POST /api/actions/{ticker}/execute action={body.action} bucket={body.bucket} qty={body.qty} fill_price={body.actual_fill_price}")
 
     stock = db.execute(
         select(Stock).where(
@@ -206,6 +212,7 @@ def execute_action(
 @router.post("/skip-month", status_code=201)
 def skip_month(body: SkipMonthRequest, db: Session = Depends(get_db)) -> dict:
     """Log a deliberate skip-this-month decision (F-6.8)."""
+    logger.info(f"POST /api/actions/skip-month reason={body.reason!r}")
 
     snapshot = db.execute(
         select(RebalanceSnapshot).order_by(RebalanceSnapshot.run_date.desc()).limit(1)
@@ -227,6 +234,7 @@ def skip_month(body: SkipMonthRequest, db: Session = Depends(get_db)) -> dict:
 @router.get("/refresh-prices", response_model=RefreshPricesResponse)
 def refresh_prices(db: Session = Depends(get_db)) -> RefreshPricesResponse:
     """Pull 15-min delayed quotes for the current action list (F-6.7)."""
+    logger.info("GET /api/actions/refresh-prices")
     from pipeline.providers.registry import get_data_provider
 
     snapshot = db.execute(
@@ -255,6 +263,7 @@ def refresh_prices(db: Session = Depends(get_db)) -> RefreshPricesResponse:
         except Exception:  # noqa: BLE001
             pass
 
+    logger.info(f"refresh-prices → updated {len(updated)}/{len(tickers)} tickers")
     return RefreshPricesResponse(
         updated=updated,
         as_of=datetime.now(tz=timezone.utc).isoformat(),

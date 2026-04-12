@@ -1,19 +1,23 @@
-"""GET /api/stocks/{ticker} — 7-tab stock detail card."""
+"""GET /api/stocks/{ticker} — stock detail card."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from api.deps import get_db
 from api.schemas.stocks import (
+    AnalystForecast,
     EventItem,
     FundamentalData,
     HoldingDetail,
     NewsItem,
+    PeerStock,
     PricePoint,
+    QuarterlyEstimate,
     ScoreBucket,
     SentimentSummary,
     StockDetailResponse,
@@ -30,6 +34,8 @@ from pipeline.db.models import (
     Stock,
 )
 from pipeline.portfolio.diff import _format_reason
+from pipeline.providers.errors import MissingApiKeyError, PlanLimitError, SymbolNotFoundError
+from pipeline.providers.fmp_provider import FMPProvider
 from pipeline.scoring.base import ScoreOutput
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
@@ -77,9 +83,6 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
         .order_by(NewsItemModel.published_at.desc())
         .limit(30)
     ).scalars().all()
-
-    # Sentiment summary
-    sentiment = _compute_sentiment(news_rows)
 
     # Events
     event_rows = db.execute(
@@ -136,11 +139,21 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
         factor_scores=best_score.factor_scores if best_score else {},
     )) if best_score else f"No score data for {ticker}."
 
+    provider = FMPProvider()
+    live_news = _load_live_news(provider, stock)
+    news_items = _merge_news(news_rows, live_news)
+    sentiment = _compute_sentiment(news_rows)
+    live_events = _load_live_events(provider, stock)
+    events = _merge_events(event_rows, live_events)
+    forecasts = _load_forecasts(provider, stock, current_price)
+    peers, peers_note = _build_peers(provider, stock, snapshot.id if snapshot else None, db)
+
     return StockDetailResponse(
         ticker=stock.ticker,
         country=Country(stock.country),
         company_name=stock.name,
         sector=stock.sector,
+        description=stock.description,
         market_cap=stock.market_cap,
         current_price=current_price,
         fundamentals=FundamentalData(
@@ -159,8 +172,9 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
             as_of=fund_row.fiscal_date,
         ) if fund_row else None,
         sentiment=sentiment,
-        forecasts=None,     # analyst forecasts — FMP endpoint, to be wired in v1.1
-        peers=[],           # peers — FMP peers endpoint, to be wired in v1.1
+        forecasts=forecasts,
+        peers=peers,
+        peers_note=peers_note,
         holding=holding_detail,
         events=[
             EventItem(
@@ -168,21 +182,9 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
                 event_date=e.event_date,
                 description=str(e.meta) if e.meta else None,
             )
-            for e in event_rows
+            for e in events
         ],
-        news=[
-            NewsItem(
-                id=n.id,
-                headline=n.headline,
-                source=n.source,
-                url=n.url,
-                published_at=n.published_at,
-                sentiment=n.sentiment_label,
-                compound_score=n.sentiment_score,
-                category=n.category,
-            )
-            for n in news_rows
-        ],
+        news=news_items,
         scores=scores,
         plain_english_reason=plain_reason,
         price_history=[
@@ -247,3 +249,340 @@ def _build_holding_detail(
         ltcg_warning=ltcg_warn,
         pct_of_portfolio=pct,
     )
+
+
+def _load_forecasts(
+    provider: FMPProvider,
+    stock: Stock,
+    current_price: float | None,
+) -> AnalystForecast | None:
+    country = Country(stock.country)
+    try:
+        forecast = provider.get_analyst_forecast(
+            stock.ticker,
+            country,
+            current_price=current_price,
+        )
+    except MissingApiKeyError:
+        return AnalystForecast(
+            analyst_count=None,
+            buy_count=None,
+            hold_count=None,
+            sell_count=None,
+            target_high=None,
+            target_low=None,
+            target_avg=None,
+            current_price=current_price,
+            availability="missing_key",
+            note="Set FMP_API_KEY to load analyst targets and EPS estimates.",
+            quarterly_estimates=[],
+        )
+    except PlanLimitError:
+        return AnalystForecast(
+            analyst_count=None,
+            buy_count=None,
+            hold_count=None,
+            sell_count=None,
+            target_high=None,
+            target_low=None,
+            target_avg=None,
+            current_price=current_price,
+            availability="plan_limited",
+            note="Your current FMP plan does not expose analyst forecast endpoints for this stock.",
+            quarterly_estimates=[],
+        )
+    except SymbolNotFoundError:
+        return AnalystForecast(
+            analyst_count=None,
+            buy_count=None,
+            hold_count=None,
+            sell_count=None,
+            target_high=None,
+            target_low=None,
+            target_avg=None,
+            current_price=current_price,
+            availability="unavailable",
+            note=f"No analyst forecast data was returned for {stock.ticker}.",
+            quarterly_estimates=[],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Forecast load failed for {stock.ticker}: {exc}")
+        return AnalystForecast(
+            analyst_count=None,
+            buy_count=None,
+            hold_count=None,
+            sell_count=None,
+            target_high=None,
+            target_low=None,
+            target_avg=None,
+            current_price=current_price,
+            availability="error",
+            note="Analyst forecast data could not be loaded right now.",
+            quarterly_estimates=[],
+        )
+
+    if forecast is None:
+        return AnalystForecast(
+            analyst_count=None,
+            buy_count=None,
+            hold_count=None,
+            sell_count=None,
+            target_high=None,
+            target_low=None,
+            target_avg=None,
+            current_price=current_price,
+            availability="empty",
+            note="No analyst forecast data is available for this stock yet.",
+            quarterly_estimates=[],
+        )
+
+    return AnalystForecast(
+        analyst_count=forecast.analyst_count,
+        buy_count=forecast.buy_count,
+        hold_count=forecast.hold_count,
+        sell_count=forecast.sell_count,
+        target_high=forecast.target_high,
+        target_low=forecast.target_low,
+        target_avg=forecast.target_avg,
+        current_price=forecast.current_price or current_price,
+        consensus_rating=forecast.consensus_rating,
+        availability="live",
+        note=None,
+        quarterly_estimates=[
+            QuarterlyEstimate(
+                period=estimate.period,
+                fiscal_date=estimate.fiscal_date,
+                eps_estimate=estimate.eps_estimate,
+                revenue_estimate=estimate.revenue_estimate,
+                analyst_count=estimate.analyst_count,
+            )
+            for estimate in forecast.quarterly_estimates
+        ],
+    )
+
+
+def _build_peers(
+    provider: FMPProvider,
+    stock: Stock,
+    snapshot_id: int | None,
+    db: Session,
+) -> tuple[list[PeerStock], str | None]:
+    notes: list[str] = []
+    peer_tickers: list[str] = []
+
+    try:
+        peer_tickers = provider.get_stock_peers(stock.ticker, Country(stock.country))
+    except MissingApiKeyError:
+        notes.append("Set FMP_API_KEY to load provider-backed peers.")
+    except PlanLimitError:
+        notes.append("Using local same-sector peers because the current FMP plan does not expose peer lookup.")
+    except SymbolNotFoundError:
+        notes.append(f"No provider-backed peers were returned for {stock.ticker}; using local same-sector peers.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Peer load failed for {stock.ticker}: {exc}")
+        notes.append("Using local same-sector peers because provider lookup failed.")
+
+    if peer_tickers:
+        local_rows = db.execute(
+            select(Stock)
+            .options(selectinload(Stock.fundamentals))
+            .where(Stock.ticker.in_(peer_tickers))
+        ).scalars().all()
+        local_by_ticker = {row.ticker: row for row in local_rows}
+
+        peers: list[PeerStock] = []
+        for ticker in peer_tickers:
+            peer = local_by_ticker.get(ticker)
+            if peer is not None:
+                peers.append(_peer_to_schema(peer, snapshot_id, db))
+                continue
+
+            remote_peer = _build_remote_peer(provider, ticker, Country(stock.country))
+            if remote_peer is not None:
+                peers.append(remote_peer)
+
+        if peers:
+            return peers[:8], " ".join(notes) if notes else None
+
+    if not stock.sector:
+        return [], " ".join(notes) if notes else None
+
+    peer_rows = db.execute(
+        select(Stock)
+        .options(selectinload(Stock.fundamentals))
+        .where(
+            Stock.sector == stock.sector,
+            Stock.id != stock.id,
+        )
+        .limit(8)
+    ).scalars().all()
+
+    peers = [_peer_to_schema(peer, snapshot_id, db) for peer in peer_rows]
+    if peers and not notes:
+        notes.append("Showing same-sector peers from the local research universe.")
+    return peers, " ".join(notes) if notes else None
+
+
+def _peer_to_schema(peer: Stock, snapshot_id: int | None, db: Session) -> PeerStock:
+    latest_fund = max(peer.fundamentals, key=lambda f: f.fiscal_date) if peer.fundamentals else None
+    membership: list[Bucket] = []
+    if snapshot_id is not None:
+        membership = [
+            Bucket(bucket)
+            for bucket, in db.execute(
+                select(Score.bucket).where(
+                    Score.snapshot_id == snapshot_id,
+                    Score.stock_id == peer.id,
+                    Score.qualified.is_(True),
+                )
+            ).all()
+        ]
+
+    return PeerStock(
+        ticker=peer.ticker,
+        company_name=peer.name,
+        pe_ratio=latest_fund.pe if latest_fund else None,
+        roe=latest_fund.roe if latest_fund else None,
+        growth_rate=_growth_rate_from_fundamentals(peer.fundamentals),
+        market_cap=peer.market_cap,
+        bucket_membership=membership,
+    )
+
+
+def _build_remote_peer(
+    provider: FMPProvider,
+    ticker: str,
+    country: Country,
+) -> PeerStock | None:
+    try:
+        profile = provider.get_profile(ticker, country)
+        fundamentals = provider.get_quarterly_fundamentals(ticker, country, limit=8)
+    except (MissingApiKeyError, PlanLimitError, SymbolNotFoundError):
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Remote peer enrichment failed for {ticker}: {exc}")
+        return None
+
+    latest = fundamentals[0] if fundamentals else None
+    return PeerStock(
+        ticker=ticker,
+        company_name=profile.name,
+        pe_ratio=latest.pe if latest else None,
+        roe=latest.roe if latest else None,
+        growth_rate=_growth_rate_from_snapshots(fundamentals),
+        market_cap=profile.market_cap,
+        bucket_membership=[],
+    )
+
+
+def _growth_rate_from_fundamentals(fundamentals: list) -> float | None:
+    if not fundamentals:
+        return None
+    rows = sorted(fundamentals, key=lambda row: row.fiscal_date, reverse=True)
+    if len(rows) >= 5 and rows[4].revenue not in (None, 0):
+        latest = rows[0].revenue
+        prior = rows[4].revenue
+        if latest is not None and prior not in (None, 0):
+            return ((latest - prior) / abs(prior)) * 100.0
+    return None
+
+
+def _growth_rate_from_snapshots(fundamentals) -> float | None:
+    if len(fundamentals) < 5:
+        return None
+    latest = fundamentals[0].revenue
+    prior = fundamentals[4].revenue
+    if latest is None or prior in (None, 0):
+        return None
+    return ((latest - prior) / abs(prior)) * 100.0
+
+
+def _load_live_events(provider: FMPProvider, stock: Stock) -> list:
+    try:
+        return provider.get_upcoming_events(stock.ticker, Country(stock.country), within_days=120)
+    except (MissingApiKeyError, PlanLimitError, SymbolNotFoundError):
+        return []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Live event load failed for {stock.ticker}: {exc}")
+        return []
+
+
+def _load_live_news(provider: FMPProvider, stock: Stock):
+    try:
+        return provider.get_stock_news(
+            stock.ticker,
+            Country(stock.country),
+            since=datetime.utcnow() - timedelta(days=30),
+            limit=20,
+        )
+    except (MissingApiKeyError, PlanLimitError, SymbolNotFoundError):
+        return []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Live news load failed for {stock.ticker}: {exc}")
+        return []
+
+
+def _merge_news(news_rows: list[NewsItemModel], live_news) -> list[NewsItem]:
+    items = [
+        NewsItem(
+            id=row.id,
+            headline=row.headline,
+            source=row.source,
+            url=row.url,
+            published_at=row.published_at,
+            sentiment=row.sentiment_label,
+            compound_score=row.sentiment_score,
+            category=row.category,
+        )
+        for row in news_rows
+    ]
+    if not live_news:
+        return items
+
+    existing_urls = {item.url for item in items if item.url}
+    for idx, article in enumerate(live_news, start=1):
+        if article.url in existing_urls:
+            continue
+        items.append(
+            NewsItem(
+                id=-idx,
+                headline=article.headline,
+                source=article.source,
+                url=article.url,
+                published_at=article.published_at,
+                sentiment=None,
+                compound_score=None,
+                category=None,
+            )
+        )
+    items.sort(key=lambda item: item.published_at or datetime.min, reverse=True)
+    return items[:30]
+
+
+def _merge_events(event_rows: list[Event], live_events: list) -> list:
+    if not live_events:
+        return event_rows
+
+    existing = {
+        (str(event.event_type), event.event_date)
+        for event in event_rows
+    }
+    merged = list(event_rows)
+    for event in live_events:
+        key = (str(event.event_type), event.event_date)
+        if key in existing:
+            continue
+        merged.append(
+            type(
+                "LiveEventRow",
+                (),
+                {
+                    "event_type": event.event_type,
+                    "event_date": event.event_date,
+                    "meta": event.meta,
+                },
+            )()
+        )
+        existing.add(key)
+    merged.sort(key=lambda event: event.event_date or date.max)
+    return merged[:10]

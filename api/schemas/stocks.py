@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from pipeline.db.enums import Bucket, Country, SentimentLabel
 
@@ -60,6 +60,18 @@ class AnalystForecast(BaseModel):
     target_low: Optional[float]
     target_avg: Optional[float]
     current_price: Optional[float]
+    consensus_rating: Optional[str] = None
+    availability: Optional[str] = None
+    note: Optional[str] = None
+    quarterly_estimates: list["QuarterlyEstimate"] = Field(default_factory=list)
+
+
+class QuarterlyEstimate(BaseModel):
+    period: str
+    fiscal_date: Optional[date]
+    eps_estimate: Optional[float]
+    revenue_estimate: Optional[float]
+    analyst_count: Optional[int]
 
 
 class PeerStock(BaseModel):
@@ -67,6 +79,7 @@ class PeerStock(BaseModel):
     company_name: Optional[str]
     pe_ratio: Optional[float]
     roe: Optional[float]
+    growth_rate: Optional[float]
     market_cap: Optional[float]
     bucket_membership: list[Bucket]
 
@@ -103,6 +116,7 @@ class StockDetailResponse(BaseModel):
     country: Country
     company_name: Optional[str]
     sector: Optional[str]
+    description: Optional[str] = None
     market_cap: Optional[float]
     current_price: Optional[float]
 
@@ -111,6 +125,7 @@ class StockDetailResponse(BaseModel):
     sentiment: Optional[SentimentSummary]
     forecasts: Optional[AnalystForecast]
     peers: list[PeerStock]
+    peers_note: Optional[str] = None
     holding: Optional[HoldingDetail]
     events: list[EventItem]
     news: list[NewsItem]

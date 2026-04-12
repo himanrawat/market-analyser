@@ -19,7 +19,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     api.dashboard()
-      .then(setData)
+      .then((d) => {
+        console.log("[Dashboard] data received:", d);
+        console.log("[Dashboard] indices:", d.indices);
+        console.log("[Dashboard] macro:", d.macro);
+        console.log("[Dashboard] vix:", d.vix);
+        setData(d);
+      })
+      .catch((err) => console.error("[Dashboard] fetch error:", err))
       .finally(() => setLoading(false));
   }, []);
 

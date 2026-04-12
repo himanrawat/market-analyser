@@ -24,9 +24,11 @@ from pipeline.db.enums import Country, EventType, NewsStream
 from pipeline.providers._http import get_json
 from pipeline.providers.cache import JsonCache
 from pipeline.providers.dto import (
+    AnalystForecastSnapshot,
     EventRecord,
     FundamentalSnapshot,
     NewsArticle,
+    QuarterlyEstimate,
     StockProfile,
 )
 from pipeline.providers.errors import MissingApiKeyError, PlanLimitError, SymbolNotFoundError
@@ -38,6 +40,8 @@ TTL_PROFILE = timedelta(hours=24)
 TTL_FUNDAMENTALS = timedelta(days=30)
 TTL_NEWS = timedelta(minutes=30)
 TTL_EVENTS = timedelta(hours=6)
+TTL_ANALYST = timedelta(hours=12)
+TTL_PEERS = timedelta(days=7)
 
 
 def _fmp_symbol(ticker: str, country: Country) -> str:
@@ -173,6 +177,167 @@ class FMPProvider:
         articles = [self._to_news(row, None, None) for row in data]
         return [a for a in articles if a and a.published_at >= since]
 
+    # ------------------------------------------------------------------
+    # Analyst forecasts / peers
+    # ------------------------------------------------------------------
+
+    def get_analyst_forecast(
+        self,
+        ticker: str,
+        country: Country,
+        *,
+        limit: int = 4,
+        current_price: float | None = None,
+    ) -> AnalystForecastSnapshot | None:
+        symbol = _fmp_symbol(ticker, country)
+
+        consensus = self._get(
+            "price-target-consensus",
+            params={"symbol": symbol},
+            cache_ttl=TTL_ANALYST,
+        ) or []
+        grades = self._get(
+            "grades-consensus",
+            params={"symbol": symbol},
+            cache_ttl=TTL_ANALYST,
+        ) or []
+        estimates = self._get(
+            "analyst-estimates",
+            params={"symbol": symbol, "period": "quarter", "page": 0, "limit": limit},
+            cache_ttl=TTL_ANALYST,
+        ) or []
+
+        consensus_row = _as_row(consensus)
+        grades_row = _as_row(grades)
+        estimate_rows = _as_rows(estimates)
+
+        if not any([consensus_row, grades_row, estimate_rows]):
+            return None
+
+        strong_buy = _first_int(grades_row, "strongBuy", "strong_buy")
+        buy = _first_int(grades_row, "buy")
+        hold = _first_int(grades_row, "hold")
+        sell = _first_int(grades_row, "sell")
+        strong_sell = _first_int(grades_row, "strongSell", "strong_sell")
+
+        buy_count = _sum_ints([strong_buy, buy])
+        sell_count = _sum_ints([sell, strong_sell])
+        analyst_count = _first_int(
+            grades_row,
+            "analystRatingsCount",
+            "numberOfAnalystOpinions",
+            "analystCount",
+            "analyst_count",
+        )
+        if analyst_count is None:
+            analyst_count = _sum_ints([buy_count, hold, sell_count])
+
+        quarterly_estimates = [
+            QuarterlyEstimate(
+                period=_first_present(
+                    row,
+                    "period",
+                    "fiscalPeriod",
+                    "calendarYear",
+                    default=f"Q{i + 1}",
+                ),
+                fiscal_date=_parse_date(
+                    _first_present(row, "date", "fiscalDateEnding", "fiscalDate", default=None)
+                ),
+                eps_estimate=_first_num(
+                    row,
+                    "estimatedEpsAvg",
+                    "estimatedEps",
+                    "epsAvg",
+                    "epsEstimated",
+                ),
+                revenue_estimate=_first_num(
+                    row,
+                    "estimatedRevenueAvg",
+                    "estimatedRevenue",
+                    "revenueAvg",
+                    "revenueEstimated",
+                ),
+                analyst_count=_first_int(
+                    row,
+                    "numberAnalystEstimatedEps",
+                    "numberAnalystEstimatedRevenue",
+                    "analystCount",
+                ),
+            )
+            for i, row in enumerate(estimate_rows[:limit])
+        ]
+
+        return AnalystForecastSnapshot(
+            ticker=ticker,
+            country=country,
+            analyst_count=analyst_count,
+            buy_count=buy_count,
+            hold_count=hold,
+            sell_count=sell_count,
+            target_high=_first_num(consensus_row, "targetHigh", "highPriceTarget", "priceTargetHigh"),
+            target_low=_first_num(consensus_row, "targetLow", "lowPriceTarget", "priceTargetLow"),
+            target_avg=_first_num(
+                consensus_row,
+                "targetConsensus",
+                "targetAverage",
+                "priceTargetAverage",
+                "targetMedian",
+            ),
+            current_price=_first_num(consensus_row, "currentPrice", "price") or current_price,
+            consensus_rating=_first_present(
+                grades_row,
+                "consensus",
+                "rating",
+                "ratingRecommendation",
+                default=None,
+            ),
+            quarterly_estimates=quarterly_estimates,
+        )
+
+    def get_stock_peers(
+        self,
+        ticker: str,
+        country: Country,
+        *,
+        limit: int = 8,
+    ) -> list[str]:
+        symbol = _fmp_symbol(ticker, country)
+        data = self._get(
+            "stock-peers",
+            params={"symbol": symbol},
+            cache_ttl=TTL_PEERS,
+        ) or []
+        row = _as_row(data)
+        if not row:
+            return []
+
+        peers: list[str] = []
+        for key in ("peersList", "peers", "symbols", "peerSymbols"):
+            value = row.get(key)
+            if isinstance(value, list):
+                peers.extend(str(item) for item in value if item)
+            elif isinstance(value, str):
+                peers.extend(part.strip() for part in value.split(",") if part.strip())
+
+        if not peers and isinstance(data, list):
+            for item in data:
+                if isinstance(item, str):
+                    peers.append(item)
+                elif isinstance(item, dict):
+                    peers.extend(
+                        str(v)
+                        for k, v in item.items()
+                        if k.lower().startswith("peer") and isinstance(v, str)
+                    )
+
+        normalized: list[str] = []
+        for peer in peers:
+            clean = _normalize_vendor_ticker(peer)
+            if clean and clean != ticker and clean not in normalized:
+                normalized.append(clean)
+        return normalized[:limit]
+
     def _to_news(
         self, row: dict[str, Any], ticker: str | None, country: Country | None
     ) -> NewsArticle | None:
@@ -204,6 +369,7 @@ class FMPProvider:
 
         earnings = self._get("earnings", params={"symbol": symbol}, cache_ttl=TTL_EVENTS) or []
         dividends = self._get("dividends", params={"symbol": symbol}, cache_ttl=TTL_EVENTS) or []
+        splits = self._get("splits", params={"symbol": symbol}, cache_ttl=TTL_EVENTS) or []
 
         events: list[EventRecord] = []
         for rec in earnings:
@@ -233,6 +399,20 @@ class FMPProvider:
                         event_type=EventType.EX_DIVIDEND,
                         event_date=d,
                         meta={"amount": rec.get("dividend") or rec.get("adjDividend")},
+                    )
+                )
+
+        split_list = splits if isinstance(splits, list) else (splits.get("historical") or [])
+        for rec in split_list:
+            d = _parse_date(rec.get("date") or rec.get("executionDate"))
+            if d and today <= d <= horizon:
+                events.append(
+                    EventRecord(
+                        ticker=ticker,
+                        country=country,
+                        event_type=EventType.SPLIT,
+                        event_date=d,
+                        meta={"ratio": rec.get("numerator") or rec.get("splitRatio") or rec.get("label")},
                     )
                 )
         return events
@@ -367,6 +547,65 @@ def _num(val: Any) -> float | None:
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _first_present(row: dict[str, Any] | None, *keys: str, default: Any = None) -> Any:
+    if not row:
+        return default
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _first_num(row: dict[str, Any] | None, *keys: str) -> float | None:
+    return _num(_first_present(row, *keys))
+
+
+def _first_int(row: dict[str, Any] | None, *keys: str) -> int | None:
+    value = _first_present(row, *keys)
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sum_ints(values: list[int | None]) -> int | None:
+    nums = [value for value in values if value is not None]
+    return sum(nums) if nums else None
+
+
+def _as_row(data: Any) -> dict[str, Any]:
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return data[0]
+    return {}
+
+
+def _as_rows(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if isinstance(data, dict):
+        for key in ("data", "items", "results"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+        return [data]
+    return []
+
+
+def _normalize_vendor_ticker(ticker: str | None) -> str | None:
+    if not ticker:
+        return None
+    clean = str(ticker).strip().upper()
+    for suffix in (".NS", ".BO"):
+        if clean.endswith(suffix):
+            return clean[: -len(suffix)]
+    return clean
 
 
 def _parse_date(val: Any) -> date | None:

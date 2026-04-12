@@ -2,7 +2,7 @@
 
 This is the entry point the pipeline runner calls. It:
 1. Loads prices + fundamentals for each ticker from SQLite (no API calls)
-2. Computes technical indicators (DMA, RSI, momentum) via pandas-ta
+2. Computes technical indicators (DMA, RSI, momentum) in-process
 3. Runs all 4 bucket scorers
 4. Returns a flat list of ScoreOutput (one per ticker per bucket)
 
@@ -84,7 +84,8 @@ class ScoringEngine:
         dma_50 = _rolling_mean(price_df["close"], 50)
         dma_200 = _rolling_mean(price_df["close"], 200)
         rsi_14 = _compute_rsi(price_df["close"], 14)
-        high_52w = float(price_df["high"].rolling(252).max().iloc[-1]) if len(price_df) >= 5 else None
+        high_52w = float(price_df["high"].tail(252).max()) if len(price_df) >= 5 else None
+        low_52w = float(price_df["low"].tail(252).min()) if len(price_df) >= 5 else None
         momentum_12m_1m = _compute_momentum(price_df["close"])
 
         return StockData(
@@ -97,6 +98,7 @@ class ScoringEngine:
             dma_200=dma_200,
             rsi_14=rsi_14,
             high_52w=high_52w,
+            low_52w=low_52w,
             momentum_12m_1m=momentum_12m_1m,
             days_to_next_earnings=None,  # set by guardrails layer
             sector_median_pe=sector_medians.get(sector) if sector else None,

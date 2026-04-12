@@ -87,6 +87,19 @@ def db():
         yield session
 
 
+@pytest.fixture(autouse=True)
+def stub_stock_detail_provider():
+    with patch("api.routers.stocks.FMPProvider") as mock_cls:
+        provider = mock_cls.return_value
+        provider.get_analyst_forecast.return_value = None
+        provider.get_stock_peers.return_value = []
+        provider.get_upcoming_events.return_value = []
+        provider.get_stock_news.return_value = []
+        provider.get_profile.return_value = None
+        provider.get_quarterly_fundamentals.return_value = []
+        yield provider
+
+
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------

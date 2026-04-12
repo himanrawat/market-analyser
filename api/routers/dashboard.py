@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,11 +27,17 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 @router.get("", response_model=DashboardResponse)
 def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
     """Return everything needed to render the main dashboard header."""
+    logger.info("GET /api/dashboard")
 
     # Latest macro snapshot
     macro_row = db.execute(
         select(MacroSnapshotModel).order_by(MacroSnapshotModel.date.desc()).limit(1)
     ).scalar_one_or_none()
+
+    if macro_row:
+        logger.debug(f"dashboard: macro_row date={macro_row.date}, nifty={macro_row.nifty_50_close}, sp500={macro_row.sp_500_close}")
+    else:
+        logger.warning("dashboard: no macro snapshot found in DB — all fields will be null")
 
     # Regime
     if macro_row:
@@ -96,6 +103,7 @@ def get_dashboard(db: Session = Depends(get_db)) -> DashboardResponse:
         else None
     )
 
+    logger.info(f"dashboard → regime={regime} shock_active={shock_active} indices={len(indices)} events={len(event_rows)}")
     return DashboardResponse(
         indices=indices,
         vix=VixReading(

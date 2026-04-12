@@ -10,8 +10,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from api.deps import get_db
 from api.schemas.news import (
@@ -37,7 +38,13 @@ def get_news(
 ) -> NewsFeedResponse:
     """Return paginated stock-specific news feed (Stream 1 — F-13.1)."""
 
-    query = select(NewsItem).order_by(NewsItem.published_at.desc())
+    logger.info(f"GET /api/news ticker={ticker!r} category={category!r} stream={stream!r} limit={limit} offset={offset}")
+
+    query = (
+        select(NewsItem)
+        .options(selectinload(NewsItem.stock))
+        .order_by(NewsItem.published_at.desc())
+    )
 
     if stream:
         query = query.where(NewsItem.stream == NewsStream(stream))
@@ -51,16 +58,17 @@ def get_news(
             query = query.where(NewsItem.stock_id == stock.id)
 
     if category:
-        query = query.where(NewsItem.category == NewsCategory(category))
+        query = query.where(NewsItem.category == NewsCategory(category.lower()))
 
-    total_query = query
-    rows = db.execute(query.limit(limit).offset(offset)).scalars().all()
+    all_rows = db.execute(query).scalars().all()
+    rows = all_rows[offset : offset + limit]
+    logger.info(f"news → total={len(all_rows)} returning={len(rows)}")
 
     return NewsFeedResponse(
         articles=[
             NewsArticle(
                 id=n.id,
-                ticker=ticker,
+                ticker=n.stock.ticker if n.stock else None,
                 headline=n.headline,
                 source=n.source,
                 url=n.url,
@@ -71,13 +79,14 @@ def get_news(
             )
             for n in rows
         ],
-        total=len(rows),
+        total=len(all_rows),
     )
 
 
 @router.get("/api/shock", response_model=ShockStatusResponse)
 def get_shock_status(db: Session = Depends(get_db)) -> ShockStatusResponse:
     """Return the current shock banner status (F-13.2.3)."""
+    logger.info("GET /api/shock")
 
     now = datetime.now(tz=timezone.utc)
 
@@ -119,6 +128,7 @@ def get_shock_status(db: Session = Depends(get_db)) -> ShockStatusResponse:
             dismissed_until=e.dismissed_until,
         )
 
+    logger.info(f"shock → active={active} latest_red_id={latest_red.id if latest_red else None} recent_events={len(recent)}")
     return ShockStatusResponse(
         active=active,
         current_event=_to_schema(latest_red) if latest_red else None,
@@ -129,6 +139,7 @@ def get_shock_status(db: Session = Depends(get_db)) -> ShockStatusResponse:
 @router.post("/api/shock/{event_id}/dismiss", status_code=200)
 def dismiss_shock(event_id: int, db: Session = Depends(get_db)) -> dict:
     """Dismiss the shock banner for 24 hours (F-13.2.3)."""
+    logger.info(f"POST /api/shock/{event_id}/dismiss")
 
     event = db.get(ShockEvent, event_id)
     if event is None:

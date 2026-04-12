@@ -222,16 +222,49 @@ class TestFMPProvider:
     def test_get_upcoming_events_earnings(self, mock_get, fmp_provider) -> None:
         today = date.today()
         future_date = (today + timedelta(days=5)).isoformat()
-        # First call → earnings list; second call → dividends dict
+        # First call → earnings list; second call → dividends dict; third call → splits list
         mock_get.side_effect = [
             [{"date": future_date, "epsEstimated": 1.5, "revenueEstimated": 100_000}],
             {"historical": []},
+            [],
         ]
         with patch.object(fmp_provider, "_require_key", return_value="fake_key"):
             events = fmp_provider.get_upcoming_events("AAPL", Country.US, within_days=30)
         earnings = [e for e in events if e.event_type == EventType.EARNINGS]
         assert len(earnings) == 1
         assert abs(earnings[0].meta["eps_estimate"] - 1.5) < 1e-9
+
+    @patch("pipeline.providers.fmp_provider.get_json")
+    def test_get_analyst_forecast_parses_targets_and_estimates(self, mock_get, fmp_provider) -> None:
+        mock_get.side_effect = [
+            [{"targetHigh": 210, "targetLow": 150, "targetConsensus": 180, "currentPrice": 172}],
+            [{"strongBuy": 7, "buy": 9, "hold": 4, "sell": 1, "strongSell": 0, "consensus": "Buy"}],
+            [
+                {
+                    "period": "2026Q2",
+                    "date": "2026-06-30",
+                    "estimatedEpsAvg": 2.15,
+                    "estimatedRevenueAvg": 1000000,
+                    "numberAnalystEstimatedEps": 12,
+                }
+            ],
+        ]
+        with patch.object(fmp_provider, "_require_key", return_value="fake_key"):
+            forecast = fmp_provider.get_analyst_forecast("AAPL", Country.US)
+
+        assert forecast is not None
+        assert forecast.target_avg == 180
+        assert forecast.buy_count == 16
+        assert forecast.sell_count == 1
+        assert forecast.consensus_rating == "Buy"
+        assert forecast.quarterly_estimates[0].eps_estimate == 2.15
+
+    @patch("pipeline.providers.fmp_provider.get_json")
+    def test_get_stock_peers_parses_peer_list(self, mock_get, fmp_provider) -> None:
+        mock_get.return_value = [{"peersList": ["MSFT", "NVDA", "GOOG"]}]
+        with patch.object(fmp_provider, "_require_key", return_value="fake_key"):
+            peers = fmp_provider.get_stock_peers("AAPL", Country.US)
+        assert peers == ["MSFT", "NVDA", "GOOG"]
 
 
 # ---------------------------------------------------------------------------

@@ -60,7 +60,7 @@ class UniverseFilter:
         """Filter a list of (ticker, country) pairs. Returns FilterResult."""
         result = FilterResult()
         stocks = self._load_stocks(tickers)
-        prices_by_stock = self._load_recent_prices(list(stocks.keys()))
+        prices_by_stock = self._load_recent_prices([stock.id for stock in stocks.values()])
 
         for (ticker, country), stock in stocks.items():
             reason = self._check(stock, prices_by_stock.get(stock.id, []))

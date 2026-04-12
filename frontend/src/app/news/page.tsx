@@ -14,7 +14,14 @@ import {
 import { fmtDate, sentimentColor } from "@/lib/format";
 import { Newspaper } from "lucide-react";
 
-const CATEGORIES = ["Earnings", "Management", "Regulatory", "M&A", "Dividend", "Other"];
+const CATEGORIES = [
+  { value: "earnings", label: "Earnings" },
+  { value: "management", label: "Management" },
+  { value: "regulatory", label: "Regulatory" },
+  { value: "m_and_a", label: "M&A" },
+  { value: "dividend", label: "Dividend" },
+  { value: "other", label: "Other" },
+];
 
 export default function NewsPage() {
   const [items, setItems] = useState<NewsArticle[]>([]);
@@ -38,10 +45,12 @@ export default function NewsPage() {
         })
         .then((r) => {
           const incoming = r.items ?? [];
+          console.log(`[News] received total=${r.total} incoming=${incoming.length} offset=${newOffset} category=${category || "all"} stream=${stream}`);
           setItems(newOffset === 0 ? incoming : (prev) => [...prev, ...incoming]);
           setTotal(r.total ?? 0);
           setOffset(newOffset + incoming.length);
         })
+        .catch((err) => console.error("[News] fetch error:", err))
         .finally(() => setLoading(false));
     },
     [category, stream]
@@ -80,8 +89,10 @@ export default function NewsPage() {
           </SelectTrigger>
           <SelectContent className="bg-slate-900 border-slate-700">
             <SelectItem value="" className="text-xs">All categories</SelectItem>
-            {CATEGORIES.map((c) => (
-              <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>
+            {CATEGORIES.map((categoryOption) => (
+              <SelectItem key={categoryOption.value} value={categoryOption.value} className="text-xs">
+                {categoryOption.label}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -126,7 +137,7 @@ export default function NewsPage() {
                 )}
                 {item.category && (
                   <Badge variant="outline" className="text-xs border-slate-700 text-slate-500 px-1.5 py-0">
-                    {item.category}
+                    {item.category.replaceAll("_", " ")}
                   </Badge>
                 )}
                 <span className="text-xs text-slate-600">
