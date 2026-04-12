@@ -12,6 +12,7 @@ The repo now ships as a working single-user full-stack application with:
 - portfolio/actions/journal execution loop
 - news and shock surfaces
 - live FMP-backed stock-detail enrichment where available
+- hybrid India fundamentals routing support via official-source imports plus vendor merge/fallback
 - automated tests and production frontend build verification
 
 ## Phase Status
@@ -20,10 +21,16 @@ The repo now ships as a working single-user full-stack application with:
 
 Implemented:
 - SQLite schema and models
-- FMP, yfinance, FRED, RBI, and NewsAPI provider abstractions
+- FMP, yfinance, FRED, RBI, NewsAPI, and official-India provider abstractions
 - caching layer
 - universe ingestion support
 - pipeline sync for prices, fundamentals, events, macro snapshots, and general market news
+- first hybrid India fundamentals slice:
+  - official India file-backed provider
+  - India-first routing in the registry
+  - vendor merge/fallback when official data is partial or absent
+  - CLI importer for downloaded NSE/BSE financial/shareholding files
+  - live NSE fetch command for quarterly financial-result detail rows plus shareholding master rows
 
 ### Phase 2: Scoring engine
 
@@ -65,6 +72,7 @@ Implemented baseline:
 Provider-dependent enrichment still degrades gracefully when data is unavailable:
 - analyst forecast endpoints on free / restricted FMP plans
 - peer endpoint fallback to same-sector local comparison if provider lookup is unavailable
+- official India fundamentals fall back to the existing vendor lane when no official import exists yet
 
 ## Key Working Flows
 
@@ -110,6 +118,12 @@ These do not break the application, but they are useful to know during review:
 - Peer comparison prefers FMP peers and falls back to same-sector local data when provider lookup is unavailable.
 - Monthly review win-rate and biggest winner/loser depend on richer closed-trade history and may show empty values.
 - Stock-specific news is still best-effort: the pipeline persists general market news, while individual stock pages can pull live stock news if the provider endpoint is available.
+- The hybrid India lane currently expects official-source files under `data/official_india/`; live NSE/BSE fetchers are not fully built yet.
+- Downloaded official files can now be normalized into that layout with `python -m pipeline.cli import-india-official ...`.
+- NSE can now populate that layout directly with `python -m pipeline.cli fetch-india-official ...`, but the live slice currently focuses on quarterly P&L detail and shareholding rows rather than full XBRL statement extraction.
+- A batch command now exists for the starter India basket: `python -m pipeline.cli fetch-india-official-batch RELIANCE TCS INFY ITC HINDUNILVR ...`.
+- The scheduler now backfills missing India official files gradually during pipeline runs, prioritizing the starter basket first and then continuing through the wider `Nifty 500`.
+- Vendor enrichment remains optional, but its failure is now silent when official India data already succeeded.
 
 ## Reviewer Notes
 

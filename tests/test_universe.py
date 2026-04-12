@@ -43,7 +43,7 @@ def _make_stock(
 
 def _make_prices(close=150.0, volume=60_000_000, n=60):
     prices = []
-    for i in range(n):
+    for _ in range(n):
         p = MagicMock()
         p.close = close
         p.volume = volume
@@ -145,29 +145,32 @@ def _make_sp500_df():
 
 
 class TestSources:
-    @patch("pandas.read_html")
-    def test_fetch_sp500_normalizes_brk(self, mock_read_html):
-        mock_read_html.return_value = [_make_sp500_df()]
-        constituents = fetch_sp500()
+    def test_fetch_sp500_normalizes_brk(self, tmp_path):
+        import pandas as pd
+        csv = tmp_path / "sp500_static.csv"
+        csv.write_text("symbol,name,sector,sub_sector\nAAPL,Apple,Technology,Hardware\nBRK-B,Berkshire B,Financials,Insurance\n")
+        with patch("pipeline.universe.sources._SP500_STATIC_CSV", csv):
+            constituents = fetch_sp500()
         tickers = [c.ticker for c in constituents]
-        assert "BRK-B" in tickers   # dot replaced with dash
+        assert "BRK-B" in tickers
         assert "BRK.B" not in tickers
 
-    @patch("pandas.read_html")
-    def test_fetch_sp500_returns_correct_country(self, mock_read_html):
-        mock_read_html.return_value = [_make_sp500_df()]
-        constituents = fetch_sp500()
+    def test_fetch_sp500_returns_correct_country(self, tmp_path):
+        import pandas as pd
+        csv = tmp_path / "sp500_static.csv"
+        csv.write_text("symbol,name,sector,sub_sector\nAAPL,Apple,Technology,Hardware\nMSFT,Microsoft,Technology,Software\n")
+        with patch("pipeline.universe.sources._SP500_STATIC_CSV", csv):
+            constituents = fetch_sp500()
         assert all(c.country == Country.US for c in constituents)
         assert all(c.index_name == IndexName.SP_500 for c in constituents)
 
-    @patch("pandas.read_html")
-    def test_fetch_sp500_skips_empty_tickers(self, mock_read_html):
-        import pandas as pd
-        df = _make_sp500_df()
-        df.loc[len(df)] = {"Symbol": "", "Security": "Ghost", "GICS Sector": "", "GICS Sub-Industry": ""}
-        mock_read_html.return_value = [df]
-        constituents = fetch_sp500()
+    def test_fetch_sp500_skips_empty_tickers(self, tmp_path):
+        csv = tmp_path / "sp500_static.csv"
+        csv.write_text("symbol,name,sector,sub_sector\nAAPL,Apple,Technology,Hardware\n,Ghost,,\n")
+        with patch("pipeline.universe.sources._SP500_STATIC_CSV", csv):
+            constituents = fetch_sp500()
         assert all(c.ticker for c in constituents)
+        assert len(constituents) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +189,12 @@ class TestUniverseLoader:
 
         engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(engine)
-        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
 
         import contextlib
         @contextlib.contextmanager
         def fake_get_session():
-            with Session() as s:
+            with session_factory() as s:
                 try:
                     yield s
                     s.commit()
@@ -245,12 +248,12 @@ class TestUniverseLoader:
 
         engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(engine)
-        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        session_factory = sessionmaker(bind=engine, expire_on_commit=False)
 
         import contextlib
         @contextlib.contextmanager
         def session_ctx():
-            with Session() as s:
+            with session_factory() as s:
                 try:
                     yield s
                     s.commit()

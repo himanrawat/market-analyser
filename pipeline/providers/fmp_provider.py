@@ -7,8 +7,10 @@ FMP migrated all endpoints from /api/v3/ (legacy, now 403) to /stable/
   - ratios-ttm, key-metrics-ttm for all tickers ✓
   - earnings calendar ✓
   - dividends ✓
+  - news: fmp-articles, news/general-latest, news/stock-latest, news/stock ✓
   - Indian stock fundamentals (income-stmt etc.) require a higher plan → 402;
     the registry catches PlanLimitError and falls back to yfinance.
+  - index constituents (sp500_constituent, sp100_constituent) require Professional plan → NOT used.
 
 All responses are cached via `JsonCache` with per-endpoint TTLs.
 """
@@ -157,7 +159,7 @@ class FMPProvider:
     def get_stock_news(
         self, ticker: str, country: Country, since: datetime, limit: int = 50
     ) -> list[NewsArticle]:
-        """Raises PlanLimitError if news endpoint not available on current plan."""
+        """Symbol-specific stock news. Endpoint: /stable/news/stock?symbols=AAPL"""
         symbol = _fmp_symbol(ticker, country)
         data = self._get(
             "news/stock",
@@ -167,13 +169,34 @@ class FMPProvider:
         articles = [self._to_news(row, ticker, country) for row in data]
         return [a for a in articles if a and a.published_at >= since]
 
-    def get_general_news(self, since: datetime, limit: int = 100) -> list[NewsArticle]:
-        """Raises PlanLimitError if general news not available on current plan."""
+    def get_stock_news_latest(self, since: datetime, limit: int = 50) -> list[NewsArticle]:
+        """Latest stock news across all tickers. Endpoint: /stable/news/stock-latest"""
         data = self._get(
-            "news/general",
+            "news/stock-latest",
             params={"limit": limit},
             cache_ttl=TTL_NEWS,
         ) or []
+        articles = [self._to_news(row, None, None) for row in data]
+        return [a for a in articles if a and a.published_at >= since]
+
+    def get_general_news(self, since: datetime, limit: int = 100) -> list[NewsArticle]:
+        """General market news. Endpoint: /stable/news/general-latest"""
+        data = self._get(
+            "news/general-latest",
+            params={"limit": limit},
+            cache_ttl=TTL_NEWS,
+        ) or []
+        articles = [self._to_news(row, None, None) for row in data]
+        return [a for a in articles if a and a.published_at >= since]
+
+    def get_fmp_articles(self, since: datetime, limit: int = 20) -> list[NewsArticle]:
+        """FMP's own market analysis articles. Endpoint: /stable/fmp-articles"""
+        data = self._get(
+            "fmp-articles",
+            params={"page": 0, "limit": limit},
+            cache_ttl=TTL_NEWS,
+        ) or []
+        # fmp-articles uses 'date' and 'link' instead of 'publishedDate' and 'url'
         articles = [self._to_news(row, None, None) for row in data]
         return [a for a in articles if a and a.published_at >= since]
 
@@ -416,6 +439,7 @@ class FMPProvider:
                     )
                 )
         return events
+
 
 
 # ---------------------------------------------------------------------------

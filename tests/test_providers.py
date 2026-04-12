@@ -17,16 +17,18 @@ import pytest
 
 from pipeline.db.enums import Country, EventType
 from pipeline.providers.cache import JsonCache
-from pipeline.providers.dto import NewsArticle, PriceBar, StockProfile
+from pipeline.providers.dto import FundamentalSnapshot, NewsArticle, PriceBar, StockProfile
 from pipeline.providers.errors import (
     MissingApiKeyError,
+    PlanLimitError,
     ProviderRateLimitError,
     SymbolNotFoundError,
 )
 from pipeline.providers.fmp_provider import FMPProvider, _parse_date, _parse_datetime
+from pipeline.providers.india_official_provider import IndiaOfficialFundamentalsProvider
 from pipeline.providers.newsapi_provider import NewsAPIProvider
 from pipeline.providers.registry import DataProvider, get_data_provider
-from pipeline.providers.yfinance_provider import YFinanceProvider, _yf_symbol
+from pipeline.providers.yfinance_provider import YFinanceProvider, _yf_symbol, _yf_symbols
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +49,11 @@ def yf_provider(tmp_path: Path) -> YFinanceProvider:
 @pytest.fixture()
 def fmp_provider(tmp_path: Path) -> FMPProvider:
     return FMPProvider(cache=JsonCache("fmp", root=tmp_path))
+
+
+@pytest.fixture()
+def india_official_provider(tmp_path: Path) -> IndiaOfficialFundamentalsProvider:
+    return IndiaOfficialFundamentalsProvider(data_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +106,17 @@ class TestYFSymbol:
         assert _yf_symbol("AAPL", Country.US) == "AAPL"
 
 
+class TestYFSymbols:
+    def test_india_returns_ns_then_bo(self) -> None:
+        assert _yf_symbols("RELIANCE", Country.INDIA) == ["RELIANCE.NS", "RELIANCE.BO"]
+
+    def test_india_already_suffixed_no_duplicate(self) -> None:
+        assert _yf_symbols("RELIANCE.NS", Country.INDIA) == ["RELIANCE.NS"]
+
+    def test_us_single_symbol(self) -> None:
+        assert _yf_symbols("AAPL", Country.US) == ["AAPL"]
+
+
 # ---------------------------------------------------------------------------
 # yfinance provider (mocked)
 # ---------------------------------------------------------------------------
@@ -140,11 +158,20 @@ class TestYFinanceProvider:
             )
 
     @patch("yfinance.download")
-    def test_india_ticker_uses_ns_suffix(self, mock_dl, yf_provider) -> None:
+    def test_india_ticker_tries_ns_first(self, mock_dl, yf_provider) -> None:
         mock_dl.return_value = _make_ohlcv_df()
         yf_provider.get_daily_ohlcv("RELIANCE", Country.INDIA, date(2026, 4, 1), date(2026, 4, 3))
-        call_args = mock_dl.call_args
-        assert "RELIANCE.NS" in str(call_args)
+        first_call_symbol = mock_dl.call_args_list[0][0][0]
+        assert first_call_symbol == "RELIANCE.NS"
+
+    @patch("yfinance.download")
+    def test_india_ticker_falls_back_to_bo_when_ns_empty(self, mock_dl, yf_provider) -> None:
+        # First call (.NS) returns empty; second call (.BO) returns data
+        mock_dl.side_effect = [pd.DataFrame(), _make_ohlcv_df()]
+        bars = yf_provider.get_daily_ohlcv("RELIANCE", Country.INDIA, date(2026, 4, 1), date(2026, 4, 3))
+        assert len(bars) == 3
+        symbols_tried = [c[0][0] for c in mock_dl.call_args_list]
+        assert symbols_tried == ["RELIANCE.NS", "RELIANCE.BO"]
 
     @patch("yfinance.Ticker")
     def test_get_profile(self, mock_ticker_cls, yf_provider) -> None:
@@ -268,6 +295,206 @@ class TestFMPProvider:
 
 
 # ---------------------------------------------------------------------------
+# Official India provider
+# ---------------------------------------------------------------------------
+
+
+class TestIndiaOfficialProvider:
+    def test_get_quarterly_fundamentals_from_nse_json_computes_ratios(
+        self,
+        india_official_provider: IndiaOfficialFundamentalsProvider,
+    ) -> None:
+        root = india_official_provider.data_dir
+        (root / "nse" / "financials").mkdir(parents=True, exist_ok=True)
+        (root / "nse" / "shareholding").mkdir(parents=True, exist_ok=True)
+
+        (root / "nse" / "financials" / "RELIANCE.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "fiscal_date": "2025-12-31",
+                        "revenue": 1000,
+                        "net_income": 100,
+                        "eps": 10,
+                        "total_debt": 200,
+                        "total_equity": 500,
+                        "operating_cash_flow": 140,
+                        "capital_expenditure": -20,
+                        "ebit": 150,
+                        "ebitda": 180,
+                        "enterprise_value": 900,
+                        "close_price": 120,
+                        "dividend_per_share": 2.4,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (root / "nse" / "shareholding" / "RELIANCE.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "as_of_date": "2025-12-31",
+                        "promoter_pct": 52.5,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        snapshots = india_official_provider.get_quarterly_fundamentals(
+            "RELIANCE",
+            Country.INDIA,
+        )
+
+        assert len(snapshots) == 1
+        snap = snapshots[0]
+        assert snap.debt_equity == pytest.approx(0.4)
+        assert snap.roe == pytest.approx(20.0)
+        assert snap.roce == pytest.approx(21.4285714286)
+        assert snap.free_cash_flow == pytest.approx(120.0)
+        assert snap.pe == pytest.approx(12.0)
+        assert snap.ev_ebitda == pytest.approx(5.0)
+        assert snap.dividend_yield == pytest.approx(2.0)
+        assert snap.payout_ratio == pytest.approx(0.24)
+        assert snap.promoter_holding == pytest.approx(52.5)
+
+    def test_get_quarterly_fundamentals_falls_back_to_bse_file(
+        self,
+        india_official_provider: IndiaOfficialFundamentalsProvider,
+    ) -> None:
+        root = india_official_provider.data_dir
+        (root / "bse" / "financials").mkdir(parents=True, exist_ok=True)
+        (root / "bse" / "financials" / "INFY.csv").write_text(
+            "fiscal_date,revenue,net_income,eps\n2025-09-30,2000,400,20\n",
+            encoding="utf-8",
+        )
+
+        snapshots = india_official_provider.get_quarterly_fundamentals(
+            "INFY",
+            Country.INDIA,
+        )
+
+        assert len(snapshots) == 1
+        assert snapshots[0].ticker == "INFY"
+        assert snapshots[0].fiscal_date == date(2025, 9, 30)
+        assert snapshots[0].revenue == 2000
+
+    def test_get_quarterly_fundamentals_parses_importer_style_keys(
+        self,
+        india_official_provider: IndiaOfficialFundamentalsProvider,
+    ) -> None:
+        root = india_official_provider.data_dir
+        (root / "nse" / "financials").mkdir(parents=True, exist_ok=True)
+        (root / "nse" / "shareholding").mkdir(parents=True, exist_ok=True)
+
+        (root / "nse" / "financials" / "RELIANCE.json").write_text(
+            json.dumps(
+                {
+                    "financials": [
+                        {
+                            "period_ended": "2025-12-31",
+                            "revenue": 1000,
+                            "net_income": 100,
+                            "eps": 10,
+                            "total_debt": 200,
+                            "total_equity": 500,
+                            "operating_cash_flow": 140,
+                            "capital_expenditure": -20,
+                            "ebit": 150,
+                            "ebitda": 180,
+                            "enterprise_value": 900,
+                            "close_price": 120,
+                            "dividend_per_share": 2.4,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / "nse" / "shareholding" / "RELIANCE.json").write_text(
+            json.dumps(
+                {
+                    "shareholding": [
+                        {
+                            "as_of_date": "2025-12-31",
+                            "promoter": 52.5,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshots = india_official_provider.get_quarterly_fundamentals(
+            "RELIANCE",
+            Country.INDIA,
+        )
+
+        assert len(snapshots) == 1
+        snap = snapshots[0]
+        assert snap.fiscal_date == date(2025, 12, 31)
+        assert snap.promoter_holding == pytest.approx(52.5)
+
+    def test_get_quarterly_fundamentals_parses_live_nse_fetch_shape(
+        self,
+        india_official_provider: IndiaOfficialFundamentalsProvider,
+    ) -> None:
+        root = india_official_provider.data_dir
+        (root / "nse" / "financials").mkdir(parents=True, exist_ok=True)
+        (root / "nse" / "shareholding").mkdir(parents=True, exist_ok=True)
+
+        (root / "nse" / "financials" / "RELIANCE.json").write_text(
+            json.dumps(
+                {
+                    "financials": [
+                        {
+                            "fiscal_date": "31-Dec-2024",
+                            "period": "Third Quarter",
+                            "revenue": 13000000.0,
+                            "net_income": 900000.0,
+                            "eps": 7.1,
+                            "ebit": 1200000.0,
+                            "interest_expense": 200000.0,
+                            "tax_expense": 300000.0,
+                            "consolidated": "Consolidated",
+                            "xbrl": "https://example.com/consolidated.xml",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / "nse" / "shareholding" / "RELIANCE.json").write_text(
+            json.dumps(
+                {
+                    "shareholding": [
+                        {
+                            "as_of_date": "31-DEC-2024",
+                            "promoter_pct": 50.13,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshots = india_official_provider.get_quarterly_fundamentals(
+            "RELIANCE",
+            Country.INDIA,
+        )
+
+        assert len(snapshots) == 1
+        snap = snapshots[0]
+        assert snap.fiscal_date == date(2024, 12, 31)
+        assert snap.period == "Third Quarter"
+        assert snap.revenue == 13000000.0
+        assert snap.net_income == 900000.0
+        assert snap.eps == pytest.approx(7.1)
+        assert snap.promoter_holding == pytest.approx(50.13)
+
+
+# ---------------------------------------------------------------------------
 # FMP parse helpers
 # ---------------------------------------------------------------------------
 
@@ -324,13 +551,189 @@ class TestDataProvider:
             mock_yf.assert_called_once()
             assert result == []
 
-    def test_news_falls_back_to_newsapi(self) -> None:
+    def test_india_fundamentals_merge_official_and_vendor(self) -> None:
+        official_provider = MagicMock()
+        official_provider.get_quarterly_fundamentals.return_value = [
+            FundamentalSnapshot(
+                ticker="RELIANCE",
+                country=Country.INDIA,
+                fiscal_date=date(2025, 12, 31),
+                period="2025Q4",
+                revenue=1000.0,
+                net_income=100.0,
+                eps=10.0,
+                total_debt=200.0,
+                total_equity=500.0,
+                debt_equity=0.4,
+                operating_cash_flow=140.0,
+                free_cash_flow=120.0,
+                roe=20.0,
+                promoter_holding=52.0,
+            )
+        ]
+        dp = DataProvider(india_official=official_provider)
+
+        # India vendor lane is now yfinance (FMP removed for India)
+        with patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals") as mock_yf:
+            mock_yf.return_value = [
+                FundamentalSnapshot(
+                    ticker="RELIANCE",
+                    country=Country.INDIA,
+                    fiscal_date=date(2025, 12, 31),
+                    period="2025Q4",
+                    revenue=None,
+                    net_income=None,
+                    eps=None,
+                    pe=18.0,
+                    pb=3.0,
+                    ev_ebitda=11.0,
+                    dividend_yield=1.2,
+                    payout_ratio=0.35,
+                )
+            ]
+            merged = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
+
+        assert len(merged) == 1
+        assert merged[0].revenue == 1000.0
+        assert merged[0].promoter_holding == 52.0
+        assert merged[0].pe == 18.0
+        assert merged[0].pb == 3.0
+        assert merged[0].payout_ratio == 0.35
+
+    def test_india_fundamentals_fall_back_to_vendor_when_official_missing(self) -> None:
+        official_provider = MagicMock()
+        official_provider.get_quarterly_fundamentals.side_effect = SymbolNotFoundError(
+            "RELIANCE",
+            "india_official",
+        )
+        dp = DataProvider(india_official=official_provider)
+
+        # India vendor lane is now yfinance (FMP removed for India)
+        with patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals") as mock_yf:
+            mock_yf.return_value = [
+                FundamentalSnapshot(
+                    ticker="RELIANCE",
+                    country=Country.INDIA,
+                    fiscal_date=date(2025, 12, 31),
+                    period="2025Q4",
+                    revenue=1000.0,
+                )
+            ]
+            rows = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
+
+        assert len(rows) == 1
+        assert rows[0].revenue == 1000.0
+
+    def test_india_complete_official_fundamentals_skip_vendor_enrichment(self) -> None:
+        official_provider = MagicMock()
+        official_provider.get_quarterly_fundamentals.return_value = [
+            FundamentalSnapshot(
+                ticker="RELIANCE",
+                country=Country.INDIA,
+                fiscal_date=date(2025, 12, 31),
+                period="2025Q4",
+                revenue=1000.0,
+                net_income=100.0,
+                eps=10.0,
+                total_debt=200.0,
+                total_equity=500.0,
+                debt_equity=0.4,
+                operating_cash_flow=140.0,
+                free_cash_flow=120.0,
+                roe=20.0,
+                roce=21.4,
+                gross_margin=40.0,
+                operating_margin=15.0,
+                net_margin=10.0,
+                pe=12.0,
+                peg=1.1,
+                pb=2.0,
+                ev_ebitda=5.0,
+                dividend_per_share=2.4,
+                dividend_yield=2.0,
+                payout_ratio=0.24,
+                promoter_holding=52.5,
+            )
+        ]
+        dp = DataProvider(india_official=official_provider)
+
+        with patch.object(dp.fundamentals, "_get_vendor_fundamentals") as mock_vendor:
+            rows = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
+
+        mock_vendor.assert_not_called()
+        assert len(rows) == 1
+        assert rows[0].pe == 12.0
+
+    def test_india_sample_style_official_fundamentals_skip_vendor_enrichment(self) -> None:
+        official_provider = MagicMock()
+        official_provider.get_quarterly_fundamentals.return_value = [
+            FundamentalSnapshot(
+                ticker="RELIANCE",
+                country=Country.INDIA,
+                fiscal_date=date(2025, 12, 31),
+                period="2025Q4",
+                revenue=1000.0,
+                net_income=100.0,
+                eps=10.0,
+                total_debt=200.0,
+                total_equity=500.0,
+                debt_equity=0.4,
+                operating_cash_flow=140.0,
+                free_cash_flow=120.0,
+                roe=20.0,
+                roce=21.4285714286,
+                pe=12.0,
+                ev_ebitda=5.0,
+                dividend_per_share=2.4,
+                dividend_yield=2.0,
+                payout_ratio=0.24,
+                promoter_holding=52.5,
+            )
+        ]
+        dp = DataProvider(india_official=official_provider)
+
+        with patch.object(dp.fundamentals, "_get_vendor_fundamentals") as mock_vendor:
+            rows = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
+
+        mock_vendor.assert_not_called()
+        assert len(rows) == 1
+        assert rows[0].promoter_holding == 52.5
+
+    def test_india_vendor_enrichment_failure_after_official_is_silent(self) -> None:
+        official_provider = MagicMock()
+        official_provider.get_quarterly_fundamentals.return_value = [
+            FundamentalSnapshot(
+                ticker="RELIANCE",
+                country=Country.INDIA,
+                fiscal_date=date(2024, 12, 31),
+                period="Third Quarter",
+                revenue=24386500.0,
+                net_income=2180400.0,
+                eps=13.7,
+                promoter_holding=50.13,
+            )
+        ]
+        dp = DataProvider(india_official=official_provider)
+
+        with (
+            patch.object(dp.fundamentals._fmp, "get_quarterly_fundamentals", side_effect=PlanLimitError("fmp", "url")),
+            patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals", side_effect=KeyError("Timestamp('2025-12-31 00:00:00')")),
+            patch("pipeline.providers.registry.logger.debug") as mock_debug,
+            patch("pipeline.providers.registry.logger.warning") as mock_warning,
+        ):
+            rows = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
+
+        assert len(rows) == 1
+        assert rows[0].revenue == 24386500.0
+        mock_debug.assert_not_called()
+        mock_warning.assert_not_called()
+
+    def test_news_uses_newsapi_as_primary(self) -> None:
         dp = DataProvider()
         since = datetime(2026, 4, 1)
 
-        with patch.object(dp.news._fmp, "get_general_news") as mock_fmp, \
-             patch.object(dp.news._newsapi, "get_general_news") as mock_newsapi:
-            mock_fmp.side_effect = MissingApiKeyError("fmp", "FMP_API_KEY")
+        with patch.object(dp.news._newsapi, "get_general_news") as mock_newsapi, \
+             patch.object(dp.news._fmp, "get_general_news") as mock_fmp:
             mock_newsapi.return_value = [
                 NewsArticle(
                     source="newsapi",
@@ -341,14 +744,43 @@ class TestDataProvider:
             ]
             articles = dp.news.get_general_news(since)
             mock_newsapi.assert_called_once()
+            mock_fmp.assert_not_called()
             assert articles[0].headline == "Market falls"
+
+    def test_news_falls_back_to_fmp_when_newsapi_key_missing(self) -> None:
+        dp = DataProvider()
+        since = datetime(2026, 4, 1)
+
+        with patch.object(dp.news._newsapi, "get_general_news") as mock_newsapi, \
+             patch.object(dp.news._fmp, "get_general_news") as mock_fmp:
+            mock_newsapi.side_effect = MissingApiKeyError("newsapi", "NEWSAPI_KEY")
+            mock_fmp.return_value = [
+                NewsArticle(
+                    source="fmp",
+                    headline="Rate hike",
+                    url="https://example.com/2",
+                    published_at=datetime(2026, 4, 10, 10, 0),
+                )
+            ]
+            articles = dp.news.get_general_news(since)
+            mock_fmp.assert_called_once()
+            assert articles[0].headline == "Rate hike"
 
     def test_macro_routes_yf_indicators(self) -> None:
         dp = DataProvider()
         with patch.object(dp.macro._yf, "get_series") as mock_yf:
             mock_yf.return_value = []
+            dp.macro.get_series("INDIA_VIX", date(2026, 1, 1), date(2026, 4, 1))
+            mock_yf.assert_called_once_with("INDIA_VIX", date(2026, 1, 1), date(2026, 4, 1))
+
+    def test_macro_us_vix_routes_to_fred(self) -> None:
+        dp = DataProvider()
+        with patch.object(dp.macro._fred, "get_series") as mock_fred, \
+             patch.object(dp.macro._yf, "get_series") as mock_yf:
+            mock_fred.return_value = []
             dp.macro.get_series("US_VIX", date(2026, 1, 1), date(2026, 4, 1))
-            mock_yf.assert_called_once_with("US_VIX", date(2026, 1, 1), date(2026, 4, 1))
+            mock_fred.assert_called_once()
+            mock_yf.assert_not_called()
 
     def test_macro_routes_fred_indicators(self) -> None:
         dp = DataProvider()
@@ -397,7 +829,8 @@ def test_live_yfinance_reliance() -> None:
 
 
 @pytest.mark.live
-def test_live_yfinance_vix() -> None:
+def test_live_fred_us_vix() -> None:
+    """US VIX now comes from FRED (VIXCLS). Run with: pytest -m live"""
     dp = DataProvider()
     readings = dp.macro.get_series("US_VIX", date(2026, 3, 1), date(2026, 4, 1))
     assert len(readings) > 10

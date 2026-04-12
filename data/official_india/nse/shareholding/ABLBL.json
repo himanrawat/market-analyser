@@ -1,0 +1,69 @@
+{
+  "imported_at": "2026-04-12T20:52:44.952190",
+  "shareholding": [
+    {
+      "as_of_date": "31-DEC-2025",
+      "broadcast_date": "21-JAN-2026 16:26:57",
+      "company_name": "Aditya Birla Lifestyle Brands Limited",
+      "employee_trusts_pct": 0.51,
+      "new_column": true,
+      "promoter_pct": 46.6,
+      "public_pct": 52.89,
+      "record_id": "206959",
+      "remarks_web": "N",
+      "revised_data": "N",
+      "submission_date": "21-JAN-2026",
+      "symbol": "ABLBL",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_1607120_21012026042650_WEB.xml"
+    },
+    {
+      "as_of_date": "30-SEP-2025",
+      "broadcast_date": "17-OCT-2025 12:38:26",
+      "company_name": "Aditya Birla Lifestyle Brands Limited",
+      "employee_trusts_pct": 0.35,
+      "new_column": true,
+      "promoter_pct": 46.6,
+      "public_pct": 53.05,
+      "record_id": "203193",
+      "remarks_web": "N",
+      "revised_data": "N",
+      "submission_date": "17-OCT-2025",
+      "symbol": "ABLBL",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_1551299_17102025123819_WEB.xml"
+    },
+    {
+      "as_of_date": "30-JUN-2025",
+      "broadcast_date": "21-JUL-2025 19:57:42",
+      "company_name": "Aditya Birla Lifestyle Brands Limited",
+      "employee_trusts_pct": 0.35,
+      "new_column": true,
+      "promoter_pct": 46.57,
+      "public_pct": 53.07,
+      "record_id": "201252",
+      "remarks_web": "N",
+      "revised_data": "N",
+      "submission_date": "21-JUL-2025",
+      "symbol": "ABLBL",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_1489690_21072025075740_WEB.xml"
+    },
+    {
+      "as_of_date": "26-MAY-2025",
+      "broadcast_date": "24-JUN-2025 15:11:42",
+      "company_name": "Aditya Birla Lifestyle Brands Limited",
+      "employee_trusts_pct": 0.35,
+      "new_column": false,
+      "promoter_pct": 46.57,
+      "public_pct": 53.07,
+      "record_id": "199075",
+      "remarks_web": "N",
+      "revised_data": "N",
+      "submission_date": "23-JUN-2025",
+      "symbol": "ABLBL",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_199075_1469548_23062025020613_WEB.xml"
+    }
+  ],
+  "source": "nse",
+  "source_file": null,
+  "source_reference": "https://www.nseindia.com/api/corporate-share-holdings-master",
+  "ticker": "ABLBL"
+}

@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 
 from loguru import logger
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from pipeline.config import settings
 from pipeline.db import init_db
 from pipeline.db.base import get_session
-from pipeline.db.enums import EventType, MacroRegime, NewsCategory, NewsStream
+from pipeline.db.enums import Country, EventType, MacroRegime, NewsCategory, NewsStream
 from pipeline.db.models import (
     Event,
     Fundamental,
@@ -22,6 +24,7 @@ from pipeline.db.models import (
     ShockEvent,
     Stock,
 )
+from pipeline.importers import fetch_nse_official_batch
 from pipeline.logging_setup import configure_logging
 from pipeline.news.sentiment import SentimentScorer
 from pipeline.news.shock import ShockDetector
@@ -41,6 +44,7 @@ PRICE_BACKFILL_DAYS = 365 * 3 + 30
 GENERAL_NEWS_DAYS = 30
 EVENT_LOOKAHEAD_DAYS = 120
 MACRO_HISTORY_DAYS = 400
+OFFICIAL_INDIA_BOOTSTRAP_TICKERS = ("RELIANCE", "TCS", "INFY", "ITC", "HINDUNILVR")
 
 
 @dataclass(frozen=True)
@@ -69,30 +73,33 @@ def run_pipeline(
     try:
         init_db()
 
-        logger.info("Step 1/8: Refreshing universe...")
+        logger.info("Step 1/9: Refreshing universe...")
         loader = UniverseLoader()
         loader.refresh()
         universe_tickers = loader.get_active_tickers()
         logger.info(f"Active universe loaded: {len(universe_tickers)} stocks")
 
-        logger.info("Step 2/8: Pulling macro snapshot...")
+        logger.info("Step 2/9: Refreshing official India fundamentals lane...")
+        _refresh_official_india_lane(universe_tickers)
+
+        logger.info("Step 3/9: Pulling macro snapshot...")
         provider = get_data_provider()
         macro_context = _pull_macro_snapshot(provider, run_date)
 
-        logger.info("Step 3/8: Syncing prices, fundamentals, events, and news...")
+        logger.info("Step 4/9: Syncing prices, fundamentals, events, and news...")
         _pull_market_data(provider, universe_tickers, run_date, macro_context)
 
-        logger.info("Step 4/8: Applying universe filters...")
+        logger.info("Step 5/9: Applying universe filters...")
         filtered = UniverseFilter(as_of=run_date).run(universe_tickers)
 
-        logger.info("Step 5/8: Running scoring engine...")
+        logger.info("Step 6/9: Running scoring engine...")
         engine = ScoringEngine()
         score_outputs = engine.run(filtered.passed, as_of=run_date)
 
         macro_regime = _macro_regime_for_date(run_date)
         shock_regime = ShockDetector().active_shock(within_days=14) is not None
 
-        logger.info("Step 6/8: Applying guardrails...")
+        logger.info("Step 7/9: Applying guardrails...")
         guardrail_results = Guardrails(
             picks_per_bucket=picks_per_bucket,
             as_of=run_date,
@@ -102,7 +109,7 @@ def run_pipeline(
             shock_regime=shock_regime,
         )
 
-        logger.info("Step 7/8: Computing portfolio diff and deployment plan...")
+        logger.info("Step 8/9: Computing portfolio diff and deployment plan...")
         diff_result = PortfolioDiff(as_of=run_date).run(guardrail_results)
         plan = CapitalPlanner().plan(
             diff_result.buys + diff_result.adds,
@@ -114,7 +121,7 @@ def run_pipeline(
             f"undeployed={plan.undeployed:.0f}"
         )
 
-        logger.info("Step 8/8: Persisting snapshot...")
+        logger.info("Step 9/9: Persisting snapshot...")
         _persist_snapshot(
             diff_result=diff_result,
             guardrail_results=guardrail_results,
@@ -146,6 +153,99 @@ def run_pipeline(
             "Check server logs for full traceback."
         )
         raise
+
+
+def _refresh_official_india_lane(tickers: list[tuple[str, Country]]) -> None:
+    if not settings.official_india_auto_fetch_enabled:
+        logger.debug("Official India auto-fetch disabled — skipping")
+        return
+
+    batch_size = max(int(settings.official_india_auto_fetch_batch_size), 0)
+    if batch_size == 0:
+        logger.debug("Official India auto-fetch batch size is 0 — skipping")
+        return
+
+    candidates = _select_official_india_batch_candidates(
+        tickers,
+        batch_size=batch_size,
+        data_dir=settings.official_india_data_dir,
+    )
+    if not candidates:
+        logger.debug("Official India hybrid lane already warm for the current batch")
+        return
+
+    logger.info(
+        f"Fetching official India data for {len(candidates)} tickers: {', '.join(candidates)}"
+    )
+    try:
+        result = fetch_nse_official_batch(
+            tickers=candidates,
+            limit=max(int(settings.official_india_auto_fetch_limit), 1),
+            statement_scope=settings.official_india_auto_fetch_statement_scope,
+            output_dir=settings.official_india_data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Official India batch fetch failed before import: {exc}")
+        return
+
+    if result.completed:
+        logger.info(
+            f"Official India batch fetch complete — {len(result.completed)} succeeded, "
+            f"{len(result.failed)} failed"
+        )
+    for ticker, error in result.failed:
+        logger.warning(f"Official India batch fetch failed for {ticker}: {error}")
+
+
+def _select_official_india_batch_candidates(
+    tickers: list[tuple[str, Country]],
+    *,
+    batch_size: int,
+    data_dir: Path,
+) -> list[str]:
+    india_tickers = [ticker for ticker, country in tickers if country == Country.INDIA]
+    if not india_tickers or batch_size <= 0:
+        return []
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for ticker in OFFICIAL_INDIA_BOOTSTRAP_TICKERS:
+        if ticker in india_tickers and ticker not in seen:
+            ordered.append(ticker)
+            seen.add(ticker)
+    for ticker in india_tickers:
+        if ticker not in seen:
+            ordered.append(ticker)
+            seen.add(ticker)
+
+    candidates: list[str] = []
+    for ticker in ordered:
+        if _needs_official_india_fetch(ticker, data_dir):
+            candidates.append(ticker)
+        if len(candidates) >= batch_size:
+            break
+    return candidates
+
+
+def _needs_official_india_fetch(ticker: str, data_dir: Path) -> bool:
+    return not (
+        _official_india_kind_exists(data_dir, ticker, "financials")
+        and _official_india_kind_exists(data_dir, ticker, "shareholding")
+    )
+
+
+def _official_india_kind_exists(data_dir: Path, ticker: str, kind: str) -> bool:
+    for path in (
+        data_dir / "nse" / kind / f"{ticker}.json",
+        data_dir / "nse" / kind / f"{ticker}.csv",
+        data_dir / "bse" / kind / f"{ticker}.json",
+        data_dir / "bse" / kind / f"{ticker}.csv",
+        data_dir / kind / f"{ticker}.json",
+        data_dir / kind / f"{ticker}.csv",
+    ):
+        if path.exists():
+            return True
+    return False
 
 
 def _pull_market_data(provider, tickers, as_of: date, macro_context: MacroContext) -> None:

@@ -45,7 +45,7 @@ def get_json(
 
     if response.status_code == 429:
         raise ProviderRateLimitError(f"Rate limited by {url}")
-    if response.status_code in (402, 403):
+    if response.status_code in (402, 403, 404):
         raise PlanLimitError("fmp", url)
     if 500 <= response.status_code < 600:
         raise ProviderUnavailableError(f"{response.status_code} from {url}")

@@ -11,7 +11,11 @@ from pipeline.db.base import _session_factory, get_engine, get_session
 from pipeline.db.enums import Country
 from pipeline.db.models import RebalanceSnapshot, Score, Stock
 from pipeline.providers.dto import FundamentalSnapshot, MacroReading, PriceBar
-from pipeline.scheduler import run_pipeline
+from pipeline.scheduler import (
+    _needs_official_india_fetch,
+    _select_official_india_batch_candidates,
+    run_pipeline,
+)
 
 
 def _make_price_bars(ticker: str, country: Country) -> list[PriceBar]:
@@ -131,6 +135,7 @@ def test_run_pipeline_persists_snapshot(tmp_path, monkeypatch):
         patch("pipeline.scheduler.get_data_provider", return_value=fake_provider),
         patch("pipeline.scheduler.UniverseLoader.refresh"),
         patch("pipeline.scheduler.UniverseLoader.get_active_tickers", return_value=[("AAPL", Country.US)]),
+        patch("pipeline.scheduler.fetch_nse_official_batch"),
         patch("pipeline.scheduler.TelegramNotifier.send_monthly_digest", return_value=False),
         patch("pipeline.scheduler.TelegramNotifier.send_text", return_value=False),
     ):
@@ -144,3 +149,43 @@ def test_run_pipeline_persists_snapshot(tmp_path, monkeypatch):
     assert snapshot.universe_size_raw == 1
     assert snapshot.universe_size_filtered == 1
     assert len(scores) > 0
+
+
+def test_select_official_india_batch_candidates_prioritizes_seed_names(tmp_path) -> None:
+    data_dir = tmp_path / "official_india"
+    (data_dir / "nse" / "financials").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nse" / "shareholding").mkdir(parents=True, exist_ok=True)
+
+    # RELIANCE is already warm and should be skipped.
+    (data_dir / "nse" / "financials" / "RELIANCE.json").write_text("{}", encoding="utf-8")
+    (data_dir / "nse" / "shareholding" / "RELIANCE.json").write_text("{}", encoding="utf-8")
+
+    candidates = _select_official_india_batch_candidates(
+        [
+            ("RELIANCE", Country.INDIA),
+            ("TCS", Country.INDIA),
+            ("INFY", Country.INDIA),
+            ("ITC", Country.INDIA),
+            ("HINDUNILVR", Country.INDIA),
+            ("SBIN", Country.INDIA),
+            ("AAPL", Country.US),
+        ],
+        batch_size=3,
+        data_dir=data_dir,
+    )
+
+    assert candidates == ["TCS", "INFY", "ITC"]
+
+
+def test_needs_official_india_fetch_requires_both_kinds(tmp_path) -> None:
+    data_dir = tmp_path / "official_india"
+    (data_dir / "nse" / "financials").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nse" / "shareholding").mkdir(parents=True, exist_ok=True)
+
+    assert _needs_official_india_fetch("RELIANCE", data_dir) is True
+
+    (data_dir / "nse" / "financials" / "RELIANCE.json").write_text("{}", encoding="utf-8")
+    assert _needs_official_india_fetch("RELIANCE", data_dir) is True
+
+    (data_dir / "nse" / "shareholding" / "RELIANCE.json").write_text("{}", encoding="utf-8")
+    assert _needs_official_india_fetch("RELIANCE", data_dir) is False

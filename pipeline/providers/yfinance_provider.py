@@ -29,7 +29,6 @@ PROVIDER_NAME = "yfinance"
 # yfinance symbols for macro indicators we care about
 MACRO_YF_SYMBOLS: dict[str, str] = {
     "INDIA_VIX": "^INDIAVIX",
-    "US_VIX": "^VIX",
     "USD_INR": "INR=X",
     "NIFTY_50": "^NSEI",
     "SP_500": "^GSPC",
@@ -42,10 +41,17 @@ MACRO_YF_SYMBOLS: dict[str, str] = {
 
 
 def _yf_symbol(ticker: str, country: Country) -> str:
-    """Add `.NS` suffix for Indian NSE tickers; US passes through."""
+    """Primary yfinance symbol — NSE for India, pass-through for US."""
     if country == Country.INDIA and not ticker.endswith((".NS", ".BO")):
         return f"{ticker}.NS"
     return ticker
+
+
+def _yf_symbols(ticker: str, country: Country) -> list[str]:
+    """Ordered list of symbols to try. India: NSE first, BSE fallback."""
+    if country == Country.INDIA and not ticker.endswith((".NS", ".BO")):
+        return [f"{ticker}.NS", f"{ticker}.BO"]
+    return [_yf_symbol(ticker, country)]
 
 
 class YFinanceProvider:
@@ -61,19 +67,23 @@ class YFinanceProvider:
     def get_daily_ohlcv(
         self, ticker: str, country: Country, start: date, end: date
     ) -> list[PriceBar]:
-        symbol = _yf_symbol(ticker, country)
-        logger.debug(f"[yf] OHLCV {symbol} {start}→{end}")
-        try:
-            df = yf.download(
-                symbol,
-                start=start.isoformat(),
-                end=(end + timedelta(days=1)).isoformat(),
-                progress=False,
-                auto_adjust=False,
-                threads=False,
-            )
-        except Exception as exc:
-            raise SymbolNotFoundError(ticker, PROVIDER_NAME) from exc
+        symbols = _yf_symbols(ticker, country)
+        df = None
+        for symbol in symbols:
+            logger.debug(f"[yf] OHLCV {symbol} {start}→{end}")
+            try:
+                df = yf.download(
+                    symbol,
+                    start=start.isoformat(),
+                    end=(end + timedelta(days=1)).isoformat(),
+                    progress=False,
+                    auto_adjust=False,
+                    threads=False,
+                )
+            except Exception:
+                df = None
+            if df is not None and not df.empty:
+                break
 
         if df is None or df.empty:
             raise SymbolNotFoundError(ticker, PROVIDER_NAME)
@@ -147,12 +157,14 @@ class YFinanceProvider:
     # ------------------------------------------------------------------
 
     def get_profile(self, ticker: str, country: Country) -> StockProfile:
-        symbol = _yf_symbol(ticker, country)
-        t = yf.Ticker(symbol)
-        try:
-            info = t.info or {}
-        except Exception as exc:
-            raise SymbolNotFoundError(ticker, PROVIDER_NAME) from exc
+        info: dict = {}
+        for symbol in _yf_symbols(ticker, country):
+            try:
+                info = yf.Ticker(symbol).info or {}
+            except Exception:
+                info = {}
+            if info:
+                break
 
         if not info:
             raise SymbolNotFoundError(ticker, PROVIDER_NAME)
@@ -228,6 +240,8 @@ class YFinanceProvider:
 def _num(df: pd.DataFrame | None, row_label: str, col) -> float | None:
     """Safely pull a cell from a yfinance financials DataFrame."""
     if df is None or df.empty or row_label not in df.index:
+        return None
+    if col not in df.columns:
         return None
     val = df.at[row_label, col]
     if pd.isna(val):

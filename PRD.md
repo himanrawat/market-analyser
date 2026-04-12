@@ -2,11 +2,12 @@
 ## Personal Stock Picker & Monthly Rebalance Tool
 
 **Owner:** Himanshu
-**Version:** 1.1 (v1 scope locked, with filter/news/shock additions)
-**Last updated:** April 11, 2026
+**Version:** 1.2 (v1 scope locked, with hybrid India data-lane update)
+**Last updated:** April 12, 2026
 **Status:** Approved for build
 
 ### Changelog
+- **v1.2** — Changed India fundamentals architecture to a hybrid lane: official NSE filings first, BSE fallback, vendor fallback only as a last resort. Added self-computed India ratios/valuation as a core design requirement. Removed the assumption that FMP Starter is the production source of truth for Indian quarterly fundamentals.
 - **v1.1** — Added: configurable picks-per-bucket, view-more expandable list, manual filters (cap/risk/sector/country), valuation sort (P/E, P/B), refresh-prices button, two-stream news system, market-shock detection with red banner, skip-this-month action.
 - **v1.0** — Initial scope lock.
 
@@ -85,6 +86,10 @@ Occasionally, between rebalances, I may want to look up a specific stock, check 
 - **F-1.1** The system maintains a universe of stocks: Nifty 500 (India) and S&P 500 (US). Constituent lists refreshed quarterly.
 - **F-1.2** The system fetches daily OHLCV price data for every stock in the universe, going back 3 years on first run, then daily increments.
 - **F-1.3** The system fetches quarterly fundamentals for every stock: revenue, earnings, EPS, ROE, ROCE, debt/equity, free cash flow, P/E, PEG, P/B, dividend yield, payout ratio.
+- **F-1.3.1** For **India**, quarterly fundamentals use a **hybrid source priority**: official **NSE filings first**, **BSE fallback** if NSE is missing or unusable, and vendor fallback only as a last resort.
+- **F-1.3.2** For **US**, quarterly fundamentals continue to use vendor APIs (FMP primary, yfinance fallback where needed).
+- **F-1.3.3** For **India**, promoter holding comes from official shareholding disclosures, not vendor summary fields.
+- **F-1.3.4** The system computes India-specific derived metrics locally when not directly available from the source: ROE, ROCE, debt/equity, free cash flow, payout ratio, dividend yield, P/E, P/B, EV/EBITDA.
 - **F-1.4** The system fetches recent news headlines (last 30 days) for every stock at each rebalance run.
 - **F-1.5** The system fetches upcoming events for every stock: next earnings date, ex-dividend date, corporate actions.
 - **F-1.6** The system fetches macro snapshots: Fed funds rate, RBI repo rate, US/India CPI, USD/INR, India VIX, US VIX, 10-year treasury yields, oil price.
@@ -307,10 +312,29 @@ The news system has **two completely separate streams** with different sources, 
 
 ## 6. Data Sources & Integrations
 
+### 6.1 Hybrid India data lane — removals, replacements, additions
+
+**Removed from the production data-trust model**
+- FMP as the assumed source of truth for **Indian** quarterly fundamentals.
+- yfinance as the intended long-term fallback for **Indian** production fundamentals. It remains an emergency fallback only, not a quality target.
+
+**Replaced**
+- **Indian quarterly fundamentals:** `FMP/yfinance` → `NSE filings first -> BSE fallback -> vendor last resort`
+- **Indian promoter holding:** vendor summary fields → official shareholding pattern filings
+- **Indian ratio ownership:** vendor-computed ratios only → locally computed ratios from official statements when needed
+
+**Added**
+- Official exchange-filed India fundamentals lane
+- Official exchange-filed India shareholding lane
+- Local ratio/valuation computation for India
+- Stronger provider abstraction so India and US can use different source strategies without changing scoring/UI logic
+
 | Source | Purpose | Cost | Critical? |
 |---|---|---|---|
-| **Financial Modeling Prep (Starter plan)** | Fundamentals, earnings calendar, stock-specific news, peers, analyst forecasts, dividends, general market news — for both US and India | ~$22/mo (~₹1,800) | Yes |
-| **yfinance (Python lib)** | Daily OHLCV prices, VIX, India VIX, currencies, 15-min-delayed quotes for refresh button, fallback for fundamentals | Free | Yes |
+| **NSE Corporate Filings / XBRL / Integrated Filing** | **Primary source of truth for India fundamentals and shareholding** | Free | Yes |
+| **BSE Corporate Filings / XBRL** | Fallback source for India fundamentals when NSE data is unavailable or incomplete | Free | Yes |
+| **Financial Modeling Prep** | **US** fundamentals, earnings calendar, stock-specific news, peers, analyst forecasts, dividends, general market news; India vendor fallback only where necessary | ~$22/mo (~₹1,800) | Yes |
+| **yfinance (Python lib)** | Daily OHLCV prices, VIX, India VIX, currencies, 15-min-delayed quotes for refresh button, emergency fallback for missing profile/fundamental fields | Free | Yes |
 | **FRED API** | US macro (Fed funds, CPI, GDP, treasury yields) | Free | Yes |
 | **RBI DBIE (small scraper)** | India macro (repo rate, India CPI) | Free | Yes |
 | **NewsAPI.org (free dev tier)** | Backup global news source for market-shock detection (24h delayed is acceptable for shock detection) | Free | Backup |
@@ -318,7 +342,7 @@ The news system has **two completely separate streams** with different sources, 
 | **VADER sentiment** | Headline sentiment scoring | Free (pip install) | Yes |
 | **Telegram Bot API** | Monthly digest delivery + RED banner shock alerts | Free | Optional |
 
-**Total recurring cost: ~₹1,800/month.** Real-time price streaming explicitly NOT purchased — see section 9 Permanently Excluded.
+**Total recurring cost: currently still ~₹1,800/month.** The hybrid rollout reduces dependency on paid vendor coverage for India, but the current working assumption is that FMP is still retained for US data and stock-detail enrichments. Real-time price streaming explicitly NOT purchased — see section 9 Permanently Excluded.
 
 ---
 
@@ -347,7 +371,7 @@ Alternatively v1 can run entirely on my laptop with manual pipeline triggers, de
 
 | Layer | Technology |
 |---|---|
-| Pipeline | Python 3.11+, pandas, pandas-ta, yfinance, fredapi, requests, vaderSentiment, SQLAlchemy |
+| Pipeline | Python 3.11+, pandas, pandas-ta, yfinance, fredapi, requests, vaderSentiment, SQLAlchemy, exchange-filings parsers/importers |
 | Database | SQLite (v1), upgrade to PostgreSQL only if/when needed |
 | Backend API | FastAPI (Python) |
 | Frontend | Next.js 14+, TypeScript, Tailwind, shadcn/ui, Recharts or Lightweight Charts |
@@ -489,7 +513,8 @@ Because this is a personal tool, success is not measured in users or revenue. It
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | R-1 | I panic-sell during a market drawdown and abandon the system | High | High | Trade journal forces reflection on every exit. 6-month minimum trial period agreed before judging performance. |
-| R-2 | FMP API changes pricing or shuts down | Low | High | Build a clean abstraction layer (`data_provider.py`); yfinance fallback for prices, manual scraping fallback for fundamentals. |
+| R-2 | FMP API changes pricing or shuts down | Low | High | Build a clean abstraction layer; official NSE/BSE lane becomes the source of truth for India, yfinance remains price fallback, and vendor dependence is concentrated mainly in US + enrichments. |
+| R-14 | Official NSE/BSE filing formats or anti-bot behavior change | Medium | Medium | Keep provider abstraction strict, support both NSE and BSE, store normalized imports locally, and make vendor fallback explicit instead of silent. |
 | R-3 | Scoring formulas overfit to recent market conditions | Medium | High | No backtesting in v1 means no overfitting opportunity. Formulas use textbook factor definitions, not optimized parameters. |
 | R-4 | Sentiment lens generates noisy or wrong signals | High | Low | Sentiment is weighted lowest. It's informational on the stock card, not part of the score in v1. |
 | R-5 | Pipeline fails silently on the 6th and I miss the rebalance | Medium | Medium | Telegram digest doubles as a heartbeat — no message means something broke. |
@@ -510,13 +535,21 @@ High-level phasing — detailed week-by-week plan to be produced separately.
 
 ### Phase 1: Data foundation (weeks 1–2)
 - Set up Python project, SQLite schema
-- FMP integration: fundamentals, news, events, peers
+- FMP integration: US fundamentals, news, events, peers
 - yfinance integration: prices, currencies, VIX, 15-min-delayed quote helper
 - FRED integration: US macro
 - RBI scraper: India macro
 - NewsAPI free-tier integration as backup news source
 - Universe ingestion: Nifty 500 + S&P 500 ticker lists
 - Data caching layer
+
+### Phase 1.5: Hybrid India fundamentals lane
+- Add official India fundamentals provider abstraction
+- NSE filings as primary India source
+- BSE filings as fallback India source
+- Shareholding ingestion for promoter holding
+- Local derived-metrics computation for India
+- Vendor merge/fallback only when official data is missing or incomplete
 
 ### Phase 2: Scoring engine (weeks 3–4)
 - Universe filter implementation
@@ -570,7 +603,9 @@ None. All major decisions are locked:
 - ✅ Country split: 10 each, separate (not combined)
 - ✅ Single user, no auth
 - ✅ Decision support only, no order execution
-- ✅ Data lane: FMP Starter ($22/mo) + free fallbacks
+- ✅ Data lane: hybrid
+- India: official NSE filings first, BSE fallback, vendor last resort
+- US: FMP primary + yfinance fallback
 - ✅ Hosting: VPS (~₹500/mo)
 - ✅ Stack: Python pipeline + Next.js UI hybrid
 - ✅ Rebalance day: 7th (with auto-shift for holidays)
@@ -611,4 +646,4 @@ None. All major decisions are locked:
 
 ---
 
-**End of PRD v1.0**
+**End of PRD v1.2**

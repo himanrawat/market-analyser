@@ -1,0 +1,32 @@
+{
+  "financials": [
+    {
+      "audited": "Un-Audited",
+      "broadcast_date": "09-Jun-2010 14:47:08",
+      "company_name": "Abbott India Limited",
+      "consolidated": "Non-Consolidated",
+      "cumulative": "Non-cumulative",
+      "filing_date": "09-Jun-2010 18:27",
+      "financial_year": "01-Dec-2009 To 30-Nov-2010",
+      "fiscal_date": "28-Feb-2010",
+      "format": "Old",
+      "from_date": "01-Dec-2009",
+      "ind_as": "Non-Ind-AS",
+      "industry": "-",
+      "isin": "INE358A01014",
+      "nse_results_data": {},
+      "params": "01-Dec-200928-Feb-2010Q1UNNNAEABBOTINDIA",
+      "period": "First Quarter",
+      "re_ind": "-",
+      "seq_number": "75466",
+      "symbol": "ABBOTINDIA",
+      "to_date": "28-Feb-2010",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/-"
+    }
+  ],
+  "imported_at": "2026-04-12T20:18:03.407665",
+  "source": "nse",
+  "source_file": null,
+  "source_reference": "https://www.nseindia.com/api/corporates-financial-results",
+  "ticker": "ABBOTINDIA"
+}

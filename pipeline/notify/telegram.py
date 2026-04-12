@@ -37,8 +37,8 @@ class TelegramNotifier:
         bot_token: str | None = None,
         chat_id: str | None = None,
     ) -> None:
-        self._token = bot_token or settings.telegram_bot_token
-        self._chat_id = chat_id or settings.telegram_chat_id
+        self._token = settings.telegram_bot_token if bot_token is None else bot_token
+        self._chat_id = settings.telegram_chat_id if chat_id is None else chat_id
 
     @property
     def _configured(self) -> bool:

@@ -5,6 +5,7 @@ description = "Personal stock picker & monthly rebalance tool for Nifty 500 + S&
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.2.0",
+    "openpyxl>=3.1.0",
     "numpy>=1.26.0",
     "yfinance>=0.2.40",
     "fredapi>=0.5.2",

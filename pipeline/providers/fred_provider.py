@@ -27,6 +27,7 @@ FRED_SERIES: dict[str, str] = {
     "US_10Y": "DGS10",              # 10-year treasury constant maturity (daily)
     "US_GDP_GROWTH": "A191RL1Q225SBEA",  # Real GDP growth rate (quarterly)
     "US_UNEMPLOYMENT": "UNRATE",    # Unemployment rate (monthly)
+    "US_VIX": "VIXCLS",            # CBOE Volatility Index (daily)
 }
 
 
