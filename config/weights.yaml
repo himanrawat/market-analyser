@@ -1,0 +1,44 @@
+# Scoring factor weights (F-11.1). These are the defaults from the PRD.
+# Override via Settings UI — changes are stored in settings_kv DB table,
+# which the scoring engine reads at run time.
+#
+# Each bucket must sum to 100 (excluding disqualifiers, which are pass/fail).
+
+quality_value:
+  roe_5yr_avg: 15
+  debt_equity: 10
+  earnings_growth_5yr_cagr: 10
+  fcf_positive_growing: 10
+  pe_vs_sector_median: 15
+  pe_vs_own_5yr_median: 10
+  dividend_yield: 5
+  promoter_holding_stable: 5   # India only — ignored for US stocks
+  # remaining 20 pts: reserved for future factors in v1.1+
+
+momentum:
+  momentum_12m_1m: 25
+  above_200dma: 10
+  dma_50_above_200: 10
+  distance_from_52wk_high: 10
+  volume_trend: 10
+  earnings_beat: 10
+  sales_growth_latest_qtr: 15
+  rsi_14: 10
+
+quality_momentum:
+  roe_5yr_avg: 15
+  debt_equity: 10
+  earnings_growth_3yr_cagr: 15
+  fcf_positive_growing: 10
+  momentum_12m_1m: 20
+  above_200dma: 10
+  dma_50_above_200: 10
+  distance_from_52wk_high: 10
+
+dividend_growth:
+  consecutive_dividend_years: 25
+  dividend_growth_5yr_cagr: 20
+  dividend_yield: 15
+  payout_ratio: 15
+  fcf_coverage_of_dividend: 15
+  earnings_stability: 10
