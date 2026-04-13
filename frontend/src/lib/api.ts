@@ -4,7 +4,18 @@
  * even when backend schemas evolve.
  */
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+function resolveBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== "undefined") {
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+  return "http://127.0.0.1:8000";
+}
+
+const BASE = resolveBaseUrl();
+const REQUEST_TIMEOUT_MS = 10000;
 
 export class ApiError extends Error {
   status: number;
@@ -51,7 +62,22 @@ async function get<T>(
     });
   }
   console.log(`[API] GET ${url.toString()}`);
-  const res = await fetch(url.toString(), { cache: "no-store" });
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(`GET ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`, 408);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
   console.log(`[API] GET ${path} → ${res.status}`);
   if (!res.ok) {
     const detail = await parseErrorDetail(res);
@@ -67,11 +93,24 @@ async function get<T>(
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
   console.log(`[API] POST ${BASE + path}`, body ?? "");
-  const res = await fetch(BASE + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(`POST ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`, 408);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
   console.log(`[API] POST ${path} → ${res.status}`);
   if (!res.ok) {
     const detail = await parseErrorDetail(res);
@@ -85,11 +124,24 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 
 async function put<T>(path: string, body?: unknown): Promise<T> {
   console.log(`[API] PUT ${BASE + path}`, body ?? "");
-  const res = await fetch(BASE + path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(`PUT ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`, 408);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
   console.log(`[API] PUT ${path} → ${res.status}`);
   if (!res.ok) {
     const detail = await parseErrorDetail(res);
@@ -103,7 +155,19 @@ async function put<T>(path: string, body?: unknown): Promise<T> {
 
 async function del(path: string): Promise<void> {
   console.log(`[API] DELETE ${BASE + path}`);
-  const res = await fetch(BASE + path, { method: "DELETE" });
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { method: "DELETE", signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(`DELETE ${path} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`, 408);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
   console.log(`[API] DELETE ${path} → ${res.status}`);
   if (!res.ok) {
     const detail = await parseErrorDetail(res);
@@ -172,6 +236,16 @@ export interface MacroSnapshot {
   as_of: string | null;
 }
 
+export interface BreadthSnapshot {
+  as_of: string | null;
+  advances: number | null;
+  declines: number | null;
+  unchanged: number | null;
+  advance_decline_ratio: number | null;
+  india_vix: number | null;
+  india_vix_change_pct: number | null;
+}
+
 export interface UpcomingEvent {
   ticker: string | null;
   event_type: string;
@@ -189,8 +263,10 @@ export interface ShockBannerStatus {
 
 export interface DashboardResponse {
   indices: IndexQuote[];
+  sector_indices: IndexQuote[];
   vix: VixReading;
   macro: MacroSnapshot;
+  breadth: BreadthSnapshot | null;
   upcoming_events: UpcomingEvent[];
   shock: ShockBannerStatus;
   as_of: string;
@@ -406,14 +482,95 @@ export interface StockDetailResponse {
   week_52_high: number | null;
   week_52_low: number | null;
   description: string | null;
+  isin: string | null;
+  nse_symbol: string | null;
+  bse_symbol: string | null;
+  bse_scripcode: string | null;
+  latest_quote: {
+    date: string | null;
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number | null;
+    volume: number | null;
+    vwap: number | null;
+    delivery_pct: number | null;
+    delivery_volume: number | null;
+    source: string | null;
+  } | null;
+  india_guardrails: {
+    in_fno_ban: boolean;
+    in_asm_gsm: boolean;
+    promoter_pledge_pct: number | null;
+  } | null;
+  market_depth: {
+    snapshot_at: string;
+    buy_depth: { price: number; quantity: number; orders: number | null }[];
+    sell_depth: { price: number; quantity: number; orders: number | null }[];
+    total_buy_qty: number | null;
+    total_sell_qty: number | null;
+    source: string | null;
+  } | null;
+  derivatives: {
+    as_of: string;
+    oi_futures: number | null;
+    oi_futures_change: number | null;
+    oi_call_total: number | null;
+    oi_put_total: number | null;
+    put_call_ratio: number | null;
+    max_pain_strike: number | null;
+    atm_iv: number | null;
+    top_call_oi_strike: number | null;
+    top_put_oi_strike: number | null;
+    source: string | null;
+  } | null;
+  recent_bulk_deals: {
+    deal_type: string;
+    trade_date: string;
+    client_name: string | null;
+    transaction_type: string | null;
+    quantity: number | null;
+    trade_price: number | null;
+    source: string | null;
+  }[];
+  recent_insider_trades: {
+    person_name: string | null;
+    person_category: string | null;
+    transaction_type: string | null;
+    trade_date: string | null;
+    from_date: string | null;
+    to_date: string | null;
+    shares_traded: number | null;
+    trade_price: number | null;
+    post_trade_pct: number | null;
+    source: string | null;
+  }[];
   fundamentals: {
+    revenue: number | null;
+    net_income: number | null;
+    eps: number | null;
     pe_ratio: number | null;
     pb_ratio: number | null;
     roe: number | null;
+    roce: number | null;
     debt_equity: number | null;
+    free_cash_flow: number | null;
     dividend_yield: number | null;
     eps_growth_3y: number | null;
     fcf_positive: boolean | null;
+    promoter_holding: number | null;
+    promoter_pledge_pct: number | null;
+    fii_holding: number | null;
+    dii_holding: number | null;
+    is_consolidated: boolean | null;
+    data_source: string | null;
+    gnpa_pct: number | null;
+    nnpa_pct: number | null;
+    nim_pct: number | null;
+    casa_ratio: number | null;
+    credit_cost: number | null;
+    capital_adequacy_ratio: number | null;
+    as_of: string | null;
   } | null;
   price_history: PricePoint[];
   scores: ScoreBucket[];
@@ -627,13 +784,93 @@ interface ApiStockDetailResponse {
   description: string | null;
   market_cap: number | null;
   current_price: number | null;
+  isin: string | null;
+  nse_symbol: string | null;
+  bse_symbol: string | null;
+  bse_scripcode: string | null;
+  latest_quote: {
+    date: string | null;
+    open: number | null;
+    high: number | null;
+    low: number | null;
+    close: number | null;
+    volume: number | null;
+    vwap: number | null;
+    delivery_pct: number | null;
+    delivery_volume: number | null;
+    source: string | null;
+  } | null;
+  india_guardrails: {
+    in_fno_ban: boolean;
+    in_asm_gsm: boolean;
+    promoter_pledge_pct: number | null;
+  } | null;
+  market_depth: {
+    snapshot_at: string;
+    buy_depth: { price: number; quantity: number; orders: number | null }[];
+    sell_depth: { price: number; quantity: number; orders: number | null }[];
+    total_buy_qty: number | null;
+    total_sell_qty: number | null;
+    source: string | null;
+  } | null;
+  derivatives: {
+    as_of: string;
+    oi_futures: number | null;
+    oi_futures_change: number | null;
+    oi_call_total: number | null;
+    oi_put_total: number | null;
+    put_call_ratio: number | null;
+    max_pain_strike: number | null;
+    atm_iv: number | null;
+    top_call_oi_strike: number | null;
+    top_put_oi_strike: number | null;
+    source: string | null;
+  } | null;
+  recent_bulk_deals: {
+    deal_type: string;
+    trade_date: string;
+    client_name: string | null;
+    transaction_type: string | null;
+    quantity: number | null;
+    trade_price: number | null;
+    source: string | null;
+  }[];
+  recent_insider_trades: {
+    person_name: string | null;
+    person_category: string | null;
+    transaction_type: string | null;
+    trade_date: string | null;
+    from_date: string | null;
+    to_date: string | null;
+    shares_traded: number | null;
+    trade_price: number | null;
+    post_trade_pct: number | null;
+    source: string | null;
+  }[];
   fundamentals: {
+    revenue: number | null;
+    net_income: number | null;
+    eps: number | null;
     roe: number | null;
+    roce: number | null;
     debt_equity: number | null;
     free_cash_flow: number | null;
     pe_ratio: number | null;
     pb_ratio: number | null;
     dividend_yield: number | null;
+    promoter_holding: number | null;
+    promoter_pledge_pct: number | null;
+    fii_holding: number | null;
+    dii_holding: number | null;
+    is_consolidated: boolean | null;
+    data_source: string | null;
+    gnpa_pct: number | null;
+    nnpa_pct: number | null;
+    nim_pct: number | null;
+    casa_ratio: number | null;
+    credit_cost: number | null;
+    capital_adequacy_ratio: number | null;
+    as_of: string | null;
   } | null;
   sentiment: {
     positive_count: number;
@@ -918,18 +1155,46 @@ function adaptStock(response: ApiStockDetailResponse): StockDetailResponse {
     week_52_high: week52High,
     week_52_low: week52Low,
     description: response.description,
+    isin: response.isin,
+    nse_symbol: response.nse_symbol,
+    bse_symbol: response.bse_symbol,
+    bse_scripcode: response.bse_scripcode,
+    latest_quote: response.latest_quote,
+    india_guardrails: response.india_guardrails,
+    market_depth: response.market_depth,
+    derivatives: response.derivatives,
+    recent_bulk_deals: response.recent_bulk_deals,
+    recent_insider_trades: response.recent_insider_trades,
     fundamentals: response.fundamentals
       ? {
+          revenue: response.fundamentals.revenue,
+          net_income: response.fundamentals.net_income,
+          eps: response.fundamentals.eps,
           pe_ratio: response.fundamentals.pe_ratio,
           pb_ratio: response.fundamentals.pb_ratio,
           roe: response.fundamentals.roe,
+          roce: response.fundamentals.roce,
           debt_equity: response.fundamentals.debt_equity,
+          free_cash_flow: response.fundamentals.free_cash_flow,
           dividend_yield: response.fundamentals.dividend_yield,
           eps_growth_3y: null,
           fcf_positive:
             response.fundamentals.free_cash_flow != null
               ? response.fundamentals.free_cash_flow > 0
               : null,
+          promoter_holding: response.fundamentals.promoter_holding,
+          promoter_pledge_pct: response.fundamentals.promoter_pledge_pct,
+          fii_holding: response.fundamentals.fii_holding,
+          dii_holding: response.fundamentals.dii_holding,
+          is_consolidated: response.fundamentals.is_consolidated,
+          data_source: response.fundamentals.data_source,
+          gnpa_pct: response.fundamentals.gnpa_pct,
+          nnpa_pct: response.fundamentals.nnpa_pct,
+          nim_pct: response.fundamentals.nim_pct,
+          casa_ratio: response.fundamentals.casa_ratio,
+          credit_cost: response.fundamentals.credit_cost,
+          capital_adequacy_ratio: response.fundamentals.capital_adequacy_ratio,
+          as_of: response.fundamentals.as_of,
         }
       : null,
     price_history: response.price_history.map((point) => ({

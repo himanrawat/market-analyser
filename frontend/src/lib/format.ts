@@ -24,6 +24,14 @@ export function fmtNum(value: number | null | undefined, decimals = 2): string {
   return value.toFixed(decimals);
 }
 
+export function fmtCompactNum(value: number | null | undefined, decimals = 1): string {
+  if (value == null) return "—";
+  return new Intl.NumberFormat("en-IN", {
+    notation: "compact",
+    maximumFractionDigits: decimals,
+  }).format(value);
+}
+
 export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-IN", {

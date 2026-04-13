@@ -30,6 +30,7 @@ from pipeline.db.enums import (
     ShockBanner,
 )
 from pipeline.db.models import (
+    Event,
     Holding,
     MacroSnapshot,
     NewsItem,
@@ -183,7 +184,8 @@ class TestDashboard:
             fed_funds_rate=5.25, usd_inr=83.5,
         ))
         db.commit()
-        r = client.get("/api/dashboard")
+        with patch("api.routers.dashboard._load_live_breadth", return_value=None):
+            r = client.get("/api/dashboard")
         assert r.status_code == 200
         data = r.json()
         assert data["macro"]["regime"] == "risk_on"
@@ -201,6 +203,30 @@ class TestDashboard:
         db.commit()
         r = client.get("/api/dashboard")
         assert r.json()["shock"]["active"] is True
+
+    def test_upcoming_event_description_uses_human_text(self, client, db):
+        stock = _seed_stock(db, ticker="ICICIAMC", country=Country.INDIA)
+        db.add(
+            Event(
+                stock_id=stock.id,
+                event_type="corporate_action",
+                event_date=date.today(),
+                meta={
+                    "source": "NSE",
+                    "headline": "To consider final dividend, if any",
+                    "raw": {
+                        "bm_desc": "To consider final dividend, if any",
+                    },
+                },
+            )
+        )
+        db.commit()
+
+        with patch("api.routers.dashboard._load_live_breadth", return_value=None):
+            r = client.get("/api/dashboard")
+
+        assert r.status_code == 200
+        assert r.json()["upcoming_events"][0]["description"] == "To consider final dividend, if any"
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +506,29 @@ class TestStocks:
         _seed_stock(db, ticker="AMZN")
         r = client.get("/api/stocks/amzn")
         assert r.status_code == 200
+
+    def test_event_description_uses_human_text(self, client, db):
+        stock = _seed_stock(db, ticker="INFY", country=Country.INDIA)
+        db.add(
+            Event(
+                stock_id=stock.id,
+                event_type="corporate_action",
+                event_date=date.today(),
+                meta={
+                    "source": "NSE",
+                    "raw": {
+                        "bm_desc": "Board meeting to consider dividend",
+                    },
+                },
+            )
+        )
+        db.commit()
+
+        with patch("api.routers.stocks._load_live_quote", return_value=None):
+            r = client.get("/api/stocks/INFY")
+
+        assert r.status_code == 200
+        assert r.json()["events"][0]["description"] == "Board meeting to consider dividend"
 
 
 # ---------------------------------------------------------------------------

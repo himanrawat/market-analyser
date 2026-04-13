@@ -22,6 +22,18 @@ class FundamentalData(BaseModel):
     peg_ratio: Optional[float]
     dividend_yield: Optional[float]
     payout_ratio: Optional[float]
+    promoter_holding: Optional[float] = None
+    promoter_pledge_pct: Optional[float] = None
+    fii_holding: Optional[float] = None
+    dii_holding: Optional[float] = None
+    is_consolidated: Optional[bool] = None
+    data_source: Optional[str] = None
+    gnpa_pct: Optional[float] = None
+    nnpa_pct: Optional[float] = None
+    nim_pct: Optional[float] = None
+    casa_ratio: Optional[float] = None
+    credit_cost: Optional[float] = None
+    capital_adequacy_ratio: Optional[float] = None
     as_of: Optional[date]
 
 
@@ -111,6 +123,77 @@ class SentimentSummary(BaseModel):
     headline_volume_30d: int
 
 
+class QuoteSnapshot(BaseModel):
+    date: Optional[date]
+    open: Optional[float]
+    high: Optional[float]
+    low: Optional[float]
+    close: Optional[float]
+    volume: Optional[float]
+    vwap: Optional[float] = None
+    delivery_pct: Optional[float] = None
+    delivery_volume: Optional[float] = None
+    source: Optional[str] = None
+
+
+class IndiaGuardrailFlags(BaseModel):
+    in_fno_ban: bool
+    in_asm_gsm: bool
+    promoter_pledge_pct: Optional[float] = None
+
+
+class DepthLevel(BaseModel):
+    price: float
+    quantity: int
+    orders: Optional[int] = None
+
+
+class MarketDepthSnapshot(BaseModel):
+    snapshot_at: datetime
+    buy_depth: list[DepthLevel] = Field(default_factory=list)
+    sell_depth: list[DepthLevel] = Field(default_factory=list)
+    total_buy_qty: Optional[int] = None
+    total_sell_qty: Optional[int] = None
+    source: Optional[str] = None
+
+
+class DerivativesSnapshot(BaseModel):
+    as_of: date
+    oi_futures: Optional[float] = None
+    oi_futures_change: Optional[float] = None
+    oi_call_total: Optional[float] = None
+    oi_put_total: Optional[float] = None
+    put_call_ratio: Optional[float] = None
+    max_pain_strike: Optional[float] = None
+    atm_iv: Optional[float] = None
+    top_call_oi_strike: Optional[float] = None
+    top_put_oi_strike: Optional[float] = None
+    source: Optional[str] = None
+
+
+class BulkDealItem(BaseModel):
+    deal_type: str
+    trade_date: date
+    client_name: Optional[str]
+    transaction_type: Optional[str]
+    quantity: Optional[float]
+    trade_price: Optional[float]
+    source: Optional[str]
+
+
+class InsiderTradeItem(BaseModel):
+    person_name: Optional[str]
+    person_category: Optional[str]
+    transaction_type: Optional[str]
+    trade_date: Optional[date]
+    from_date: Optional[date]
+    to_date: Optional[date]
+    shares_traded: Optional[float]
+    trade_price: Optional[float]
+    post_trade_pct: Optional[float]
+    source: Optional[str]
+
+
 class StockDetailResponse(BaseModel):
     ticker: str
     country: Country
@@ -123,6 +206,12 @@ class StockDetailResponse(BaseModel):
     nse_symbol: Optional[str] = None
     bse_symbol: Optional[str] = None
     bse_scripcode: Optional[str] = None
+    latest_quote: Optional[QuoteSnapshot] = None
+    india_guardrails: Optional[IndiaGuardrailFlags] = None
+    market_depth: Optional[MarketDepthSnapshot] = None
+    derivatives: Optional[DerivativesSnapshot] = None
+    recent_bulk_deals: list[BulkDealItem] = Field(default_factory=list)
+    recent_insider_trades: list[InsiderTradeItem] = Field(default_factory=list)
 
     # Tabs
     fundamentals: Optional[FundamentalData]

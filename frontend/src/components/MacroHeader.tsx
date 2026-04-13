@@ -5,10 +5,11 @@ import { fmtNum, fmtPct, regimeLabel, regimeBadgeClass } from "@/lib/format";
 
 interface Props {
   data: DashboardResponse | null;
+  loading?: boolean;
 }
 
-export function MacroHeader({ data }: Props) {
-  if (!data) {
+export function MacroHeader({ data, loading = false }: Props) {
+  if (loading) {
     return (
       <div className="h-10 bg-card border-b border-border flex items-center px-4 text-muted-foreground text-xs">
         <div className="flex items-center gap-3">
@@ -20,7 +21,16 @@ export function MacroHeader({ data }: Props) {
     );
   }
 
+  if (!data) {
+    return (
+      <div className="h-10 bg-card border-b border-border flex items-center px-4 text-muted-foreground text-xs">
+        Dashboard data unavailable
+      </div>
+    );
+  }
+
   const { macro, vix, indices } = data;
+  const breadth = data.breadth;
 
   return (
     <div className="bg-card border-b border-border flex items-center gap-4 md:gap-6 px-4 py-2 text-xs overflow-x-auto whitespace-nowrap scrollbar-thin">
@@ -49,6 +59,15 @@ export function MacroHeader({ data }: Props) {
       <div className="flex items-center gap-1.5">
         <span className="text-muted-foreground">India VIX</span>
         <span className="text-foreground font-mono font-medium">{fmtNum(vix.india_vix, 1)}</span>
+      </div>
+
+      <div className="w-px h-4 bg-border shrink-0" />
+
+      <div className="flex items-center gap-1.5">
+        <span className="text-muted-foreground">A/D</span>
+        <span className="text-foreground font-mono font-medium">
+          {fmtNum(breadth?.advance_decline_ratio, 2)}
+        </span>
       </div>
 
       <div className="w-px h-4 bg-border shrink-0" />

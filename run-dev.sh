@@ -104,7 +104,7 @@ backend_pid=$!
 echo "Starting frontend on http://localhost:$FRONTEND_PORT"
 (
   cd "$REPO_ROOT/frontend"
-  export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:$BACKEND_PORT}"
+  export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://$BACKEND_HOST:$BACKEND_PORT}"
   exec npm run dev -- --hostname "$FRONTEND_HOST" --port "$FRONTEND_PORT"
 ) >>"$frontend_log" 2>&1 &
 frontend_pid=$!

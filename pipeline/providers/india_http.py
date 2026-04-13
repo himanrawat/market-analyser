@@ -31,7 +31,9 @@ _NSE_HEADERS = {
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Avoid Brotli here — requests may not decode `br` without optional extras,
+    # which causes binary payloads for endpoints like `/api/allIndices`.
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
     "Referer": _NSE_BASE + "/",
     "Sec-Fetch-Site": "same-origin",

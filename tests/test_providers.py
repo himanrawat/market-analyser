@@ -10,6 +10,7 @@ import json
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -28,6 +29,7 @@ from pipeline.providers.fmp_provider import FMPProvider, _parse_date, _parse_dat
 from pipeline.providers.india_official_provider import IndiaOfficialFundamentalsProvider
 from pipeline.providers.newsapi_provider import NewsAPIProvider
 from pipeline.providers.registry import DataProvider, get_data_provider
+from pipeline.providers.rbi_provider import RBIProvider
 from pipeline.providers.yfinance_provider import YFinanceProvider, _yf_symbol, _yf_symbols
 
 
@@ -825,6 +827,64 @@ class TestDataProvider:
         dp = DataProvider()
         with pytest.raises(ValueError, match="Unknown macro indicator"):
             dp.macro.get_series("MADE_UP", date(2026, 1, 1), date(2026, 4, 1))
+
+
+@pytest.mark.india
+class TestRBIProvider:
+    def test_repo_rate_scrapes_rbi_home_page(self, tmp_path: Path) -> None:
+        provider = RBIProvider(cache=JsonCache("rbi", root=tmp_path))
+        response = MagicMock()
+        response.text = """
+            <table>
+              <tr>
+                <th>Policy Repo Rate</th>
+                <td>: 6.50%</td>
+              </tr>
+            </table>
+        """
+        response.raise_for_status.return_value = None
+
+        with patch("pipeline.providers.rbi_provider.requests.get", return_value=response):
+            rows = provider.get_series("INDIA_REPO_RATE", date(2026, 1, 1), date(2026, 4, 1))
+
+        assert len(rows) == 1
+        assert rows[0].indicator == "INDIA_REPO_RATE"
+        assert rows[0].value == 6.5
+
+    def test_india_cpi_yoy_uses_filtered_mospi_rows(self, tmp_path: Path) -> None:
+        provider = RBIProvider(cache=JsonCache("rbi", root=tmp_path))
+
+        def fake_run(cmd, capture_output, text, check):
+            url = cmd[-1]
+            if "year=2025" in url and "month_code=12" in url:
+                payload = {
+                    "data": [
+                        {
+                            "state": "All India",
+                            "sector": "Combined",
+                            "group": "General",
+                            "subgroup": "General-Overall",
+                            "inflation": "1.33",
+                        },
+                        {
+                            "state": "Andhra Pradesh",
+                            "sector": "Combined",
+                            "group": "General",
+                            "subgroup": "General-Overall",
+                            "inflation": "2.71",
+                        },
+                    ]
+                }
+            else:
+                payload = {"data": []}
+            return SimpleNamespace(stdout=json.dumps(payload))
+
+        with patch("pipeline.providers.rbi_provider.subprocess.run", side_effect=fake_run) as run_mock:
+            rows = provider.get_series("INDIA_CPI_YOY", date(2025, 12, 1), date(2026, 1, 31))
+
+        assert [(row.date, row.value) for row in rows] == [(date(2025, 12, 1), 1.33)]
+        urls = [call.args[0][-1] for call in run_mock.call_args_list]
+        assert any("sector_code=3" in url and "group_code=0" in url for url in urls)
 
 
 # ---------------------------------------------------------------------------

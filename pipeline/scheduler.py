@@ -557,7 +557,7 @@ def _pull_macro_snapshot(provider, as_of: date) -> MacroContext:
         "us_10y_yield": None,            # Phase 2 (US market)
         "india_10y_yield": None,
         "us_cpi_yoy": None,              # Phase 2 (US market)
-        "india_cpi_yoy": _compute_yoy(india_cpi_series),
+        "india_cpi_yoy": _latest_value(india_cpi_series),
         "usd_inr": _latest_value(usd_inr_series),
         "india_vix": _latest_value(india_vix_series),
         "us_vix": None,                  # Phase 2 (US market)

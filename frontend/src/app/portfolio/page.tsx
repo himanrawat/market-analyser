@@ -105,7 +105,7 @@ export default function PortfolioPage() {
 
   if (loading) {
     return (
-      <div className="space-y-6 max-w-5xl">
+      <div className="space-y-6">
         <div className="h-6 w-28 skeleton-shimmer rounded" />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -126,7 +126,7 @@ export default function PortfolioPage() {
   const { holdings, summary } = data;
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-4 animate-fade-in-up">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Portfolio</h1>

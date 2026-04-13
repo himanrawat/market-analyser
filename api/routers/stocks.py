@@ -9,14 +9,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from api.deps import get_db
+from api.routers._event_utils import format_event_description
 from api.schemas.stocks import (
     AnalystForecast,
+    BulkDealItem,
+    DepthLevel,
+    DerivativesSnapshot,
     EventItem,
     FundamentalData,
     HoldingDetail,
+    IndiaGuardrailFlags,
+    InsiderTradeItem,
+    MarketDepthSnapshot,
     NewsItem,
     PeerStock,
     PricePoint,
+    QuoteSnapshot,
     QuarterlyEstimate,
     ScoreBucket,
     SentimentSummary,
@@ -27,6 +35,10 @@ from pipeline.db.models import (
     Event,
     Fundamental,
     Holding,
+    IndiaBulkDeal,
+    IndiaDerivatives,
+    IndiaInsiderTrade,
+    IndiaMarketDepth,
     Price,
     RebalanceSnapshot,
     Score,
@@ -53,6 +65,7 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
     ).scalar_one_or_none()
     if stock is None:
         raise HTTPException(status_code=404, detail=f"Stock {ticker} not found")
+    country = Country(stock.country)
 
     # Latest fundamental
     fund_row = db.execute(
@@ -70,6 +83,10 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
         .limit(1)
     ).scalar_one_or_none()
     current_price = latest_price_row.close if latest_price_row else None
+    data_provider = get_data_provider()
+    live_quote = _load_live_quote(data_provider, stock)
+    if live_quote is not None:
+        current_price = live_quote.close
 
     # Price history — last 12 months
     since = date.today() - timedelta(days=365)
@@ -94,6 +111,36 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
         .order_by(Event.event_date)
         .limit(10)
     ).scalars().all()
+
+    depth_row = None
+    derivatives_row = None
+    bulk_rows: list[IndiaBulkDeal] = []
+    insider_rows: list[IndiaInsiderTrade] = []
+    if country == Country.INDIA:
+        depth_row = db.execute(
+            select(IndiaMarketDepth)
+            .where(IndiaMarketDepth.stock_id == stock.id)
+            .order_by(IndiaMarketDepth.snapshot_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        derivatives_row = db.execute(
+            select(IndiaDerivatives)
+            .where(IndiaDerivatives.stock_id == stock.id)
+            .order_by(IndiaDerivatives.as_of.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        bulk_rows = db.execute(
+            select(IndiaBulkDeal)
+            .where(IndiaBulkDeal.stock_id == stock.id)
+            .order_by(IndiaBulkDeal.trade_date.desc(), IndiaBulkDeal.id.desc())
+            .limit(8)
+        ).scalars().all()
+        insider_rows = db.execute(
+            select(IndiaInsiderTrade)
+            .where(IndiaInsiderTrade.stock_id == stock.id)
+            .order_by(IndiaInsiderTrade.trade_date.desc(), IndiaInsiderTrade.id.desc())
+            .limit(8)
+        ).scalars().all()
 
     # Holding detail
     holding_row = db.execute(
@@ -122,7 +169,7 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
             factor_scores=s.factor_scores or {},
             reason=_format_reason(ScoreOutput(
                 ticker=stock.ticker,
-                country=Country(stock.country),
+                country=country,
                 bucket=Bucket(s.bucket),
                 score=s.score,
                 qualified=s.qualified,
@@ -137,14 +184,13 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
     best_score = max(score_rows, key=lambda s: s.score) if score_rows else None
     plain_reason = _format_reason(ScoreOutput(
         ticker=stock.ticker,
-        country=Country(stock.country),
+        country=country,
         bucket=Bucket(best_score.bucket) if best_score else Bucket.QUALITY_MOMENTUM,
         score=best_score.score if best_score else 0.0,
         qualified=best_score.qualified if best_score else False,
         factor_scores=best_score.factor_scores if best_score else {},
     )) if best_score else f"No score data for {ticker}."
 
-    data_provider = get_data_provider()
     live_news = _load_live_news(data_provider, stock)
     news_items = _merge_news(news_rows, live_news)
     sentiment = _compute_sentiment(news_rows)
@@ -155,7 +201,7 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
 
     return StockDetailResponse(
         ticker=stock.ticker,
-        country=Country(stock.country),
+        country=country,
         company_name=stock.name,
         sector=stock.sector,
         description=stock.description,
@@ -165,6 +211,45 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
         nse_symbol=stock.nse_symbol,
         bse_symbol=stock.bse_symbol,
         bse_scripcode=stock.bse_scripcode,
+        latest_quote=_build_quote_snapshot(live_quote, latest_price_row),
+        india_guardrails=(
+            IndiaGuardrailFlags(
+                in_fno_ban=bool(stock.in_fno_ban),
+                in_asm_gsm=bool(stock.in_asm_gsm),
+                promoter_pledge_pct=fund_row.promoter_pledge_pct if fund_row else None,
+            )
+            if country == Country.INDIA
+            else None
+        ),
+        market_depth=_build_market_depth_snapshot(depth_row),
+        derivatives=_build_derivatives_snapshot(derivatives_row),
+        recent_bulk_deals=[
+            BulkDealItem(
+                deal_type=row.deal_type,
+                trade_date=row.trade_date,
+                client_name=row.client_name,
+                transaction_type=row.transaction_type,
+                quantity=row.quantity,
+                trade_price=row.trade_price,
+                source=row.source,
+            )
+            for row in bulk_rows
+        ],
+        recent_insider_trades=[
+            InsiderTradeItem(
+                person_name=row.person_name,
+                person_category=row.person_category,
+                transaction_type=row.transaction_type,
+                trade_date=row.trade_date,
+                from_date=row.from_date,
+                to_date=row.to_date,
+                shares_traded=row.shares_traded,
+                trade_price=row.trade_price,
+                post_trade_pct=row.post_trade_pct,
+                source=row.source,
+            )
+            for row in insider_rows
+        ],
         fundamentals=FundamentalData(
             revenue=fund_row.revenue,
             net_income=fund_row.net_income,
@@ -178,6 +263,18 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
             peg_ratio=fund_row.peg,
             dividend_yield=fund_row.dividend_yield,
             payout_ratio=fund_row.payout_ratio,
+            promoter_holding=fund_row.promoter_holding,
+            promoter_pledge_pct=fund_row.promoter_pledge_pct,
+            fii_holding=fund_row.fii_holding,
+            dii_holding=fund_row.dii_holding,
+            is_consolidated=fund_row.is_consolidated,
+            data_source=fund_row.data_source,
+            gnpa_pct=fund_row.gnpa_pct,
+            nnpa_pct=fund_row.nnpa_pct,
+            nim_pct=fund_row.nim_pct,
+            casa_ratio=fund_row.casa_ratio,
+            credit_cost=fund_row.credit_cost,
+            capital_adequacy_ratio=fund_row.capital_adequacy_ratio,
             as_of=fund_row.fiscal_date,
         ) if fund_row else None,
         sentiment=sentiment,
@@ -189,7 +286,7 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
             EventItem(
                 event_type=e.event_type,
                 event_date=e.event_date,
-                description=str(e.meta) if e.meta else None,
+                description=format_event_description(e.meta),
             )
             for e in events
         ],
@@ -200,6 +297,93 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
             PricePoint(date=p.date, close=p.close, volume=float(p.volume))
             for p in price_rows
         ],
+    )
+
+
+def _load_live_quote(data_provider, stock: Stock):
+    if Country(stock.country) != Country.INDIA:
+        return None
+    try:
+        return data_provider.market.get_latest_quote(stock.ticker, Country(stock.country))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Live quote unavailable for {stock.ticker}: {exc}")
+        return None
+
+
+def _build_quote_snapshot(live_quote, latest_price_row: Price | None) -> QuoteSnapshot | None:
+    if live_quote is not None:
+        return QuoteSnapshot(
+            date=live_quote.date,
+            open=live_quote.open,
+            high=live_quote.high,
+            low=live_quote.low,
+            close=live_quote.close,
+            volume=live_quote.volume,
+            vwap=live_quote.vwap,
+            delivery_pct=live_quote.delivery_pct,
+            delivery_volume=live_quote.delivery_volume,
+            source="official_live",
+        )
+    if latest_price_row is None:
+        return None
+    return QuoteSnapshot(
+        date=latest_price_row.date,
+        open=latest_price_row.open,
+        high=latest_price_row.high,
+        low=latest_price_row.low,
+        close=latest_price_row.close,
+        volume=float(latest_price_row.volume),
+        source="database",
+    )
+
+
+def _depth_levels(levels: list[dict] | None) -> list[DepthLevel]:
+    if not levels:
+        return []
+    parsed: list[DepthLevel] = []
+    for level in levels:
+        price = level.get("price")
+        quantity = level.get("qty", level.get("quantity"))
+        if price is None or quantity is None:
+            continue
+        parsed.append(
+            DepthLevel(
+                price=float(price),
+                quantity=int(quantity),
+                orders=int(level["orders"]) if level.get("orders") is not None else None,
+            )
+        )
+    return parsed
+
+
+def _build_market_depth_snapshot(depth_row: IndiaMarketDepth | None) -> MarketDepthSnapshot | None:
+    if depth_row is None:
+        return None
+    return MarketDepthSnapshot(
+        snapshot_at=depth_row.snapshot_at,
+        buy_depth=_depth_levels(depth_row.buy_depth),
+        sell_depth=_depth_levels(depth_row.sell_depth),
+        total_buy_qty=depth_row.total_buy_qty,
+        total_sell_qty=depth_row.total_sell_qty,
+        source=depth_row.source,
+    )
+
+
+def _build_derivatives_snapshot(derivatives_row: IndiaDerivatives | None) -> DerivativesSnapshot | None:
+    if derivatives_row is None:
+        return None
+    return DerivativesSnapshot(
+        as_of=derivatives_row.as_of,
+        oi_futures=derivatives_row.oi_futures,
+        oi_futures_change=derivatives_row.oi_futures_change,
+        oi_call_total=derivatives_row.oi_call_total,
+        oi_put_total=derivatives_row.oi_put_total,
+        put_call_ratio=derivatives_row.put_call_ratio,
+        max_pain_strike=derivatives_row.max_pain_strike,
+        atm_iv=derivatives_row.atm_iv,
+        top_call_oi_strike=derivatives_row.top_call_oi_strike,
+        top_put_oi_strike=derivatives_row.top_put_oi_strike,
+        source=derivatives_row.source,
     )
 
 

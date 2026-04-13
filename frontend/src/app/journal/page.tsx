@@ -80,7 +80,7 @@ export default function JournalPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       <div className="animate-fade-in-up">
         <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
           <BookOpen className="h-5 w-5 text-primary" /> Trade Journal

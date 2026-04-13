@@ -356,6 +356,7 @@ class IndiaMarketProvider:
     def get_market_breadth(self) -> MarketBreadthSnapshot | None:
         today = date.today()
         breadth: dict[str, Any] = {}
+        total_market_row: dict[str, Any] | None = None
 
         try:
             adv_dec = self._nse.get_advance_decline()
@@ -372,7 +373,7 @@ class IndiaMarketProvider:
         try:
             indices = self._nse.get_all_indices()
             for item in indices:
-                name = str(item.get("index") or item.get("indexSymbol") or "").upper()
+                name = str(item.get("index") or item.get("indexSymbol") or "").upper().strip()
                 last = _to_float(item.get("last") or item.get("lastPrice") or item.get("indexValue"))
                 change_pct = _to_float(item.get("percChange") or item.get("percentChange"))
 
@@ -381,8 +382,11 @@ class IndiaMarketProvider:
                     india_vix_change = change_pct
                     continue
 
+                if "NIFTY TOTAL MARKET" in name and total_market_row is None:
+                    total_market_row = item
+
                 for pattern, field in _INDEX_FIELD_MAP.items():
-                    if pattern in name:
+                    if name == pattern:
                         if last is not None:
                             index_data[field] = last
                         if change_pct is not None:
@@ -394,6 +398,13 @@ class IndiaMarketProvider:
         advances = _to_int(breadth.get("advances") or breadth.get("Advances"))
         declines = _to_int(breadth.get("declines") or breadth.get("Declines"))
         unchanged = _to_int(breadth.get("unchanged") or breadth.get("Unchanged"))
+        if total_market_row is not None:
+            if advances is None:
+                advances = _to_int(total_market_row.get("advances"))
+            if declines is None:
+                declines = _to_int(total_market_row.get("declines"))
+            if unchanged is None:
+                unchanged = _to_int(total_market_row.get("unchanged"))
         ad_ratio: float | None = None
         if advances is not None and declines is not None and declines > 0:
             ad_ratio = advances / declines

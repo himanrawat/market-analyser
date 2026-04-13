@@ -37,6 +37,16 @@ class MacroSnapshot(BaseModel):
     as_of: Optional[datetime]
 
 
+class IndiaBreadthSnapshot(BaseModel):
+    as_of: Optional[date]
+    advances: Optional[int]
+    declines: Optional[int]
+    unchanged: Optional[int]
+    advance_decline_ratio: Optional[float]
+    india_vix: Optional[float]
+    india_vix_change_pct: Optional[float]
+
+
 class UpcomingEvent(BaseModel):
     ticker: Optional[str]
     event_type: str
@@ -54,8 +64,10 @@ class ShockBannerStatus(BaseModel):
 
 class DashboardResponse(BaseModel):
     indices: list[IndexQuote]
+    sector_indices: list[IndexQuote]
     vix: VixReading
     macro: MacroSnapshot
+    breadth: Optional[IndiaBreadthSnapshot]
     upcoming_events: list[UpcomingEvent]
     shock: ShockBannerStatus
     as_of: datetime

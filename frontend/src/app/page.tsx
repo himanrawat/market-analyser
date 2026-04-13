@@ -29,8 +29,11 @@ function SkeletonCard() {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadDashboard = () => {
+    setLoading(true);
+    setError(null);
     api.dashboard()
       .then((d) => {
         console.log("[Dashboard] data received:", d);
@@ -39,13 +42,21 @@ export default function DashboardPage() {
         console.log("[Dashboard] vix:", d.vix);
         setData(d);
       })
-      .catch((err) => console.error("[Dashboard] fetch error:", err))
+      .catch((err) => {
+        console.error("[Dashboard] fetch error:", err);
+        setData(null);
+        setError(err instanceof Error ? err.message : "Could not load dashboard");
+      })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadDashboard();
   }, []);
 
   if (loading) {
     return (
-      <div className="space-y-6 max-w-5xl">
+      <div className="space-y-6">
         <div>
           <div className="h-6 w-32 skeleton-shimmer rounded" />
           <div className="h-4 w-48 skeleton-shimmer rounded mt-2" />
@@ -65,17 +76,28 @@ export default function DashboardPage() {
 
   if (!data) {
     return (
-      <div className="text-muted-foreground text-sm">
-        Could not load dashboard. Is the API running on{" "}
-        <code className="text-foreground/60 bg-muted px-1.5 py-0.5 rounded text-xs">localhost:8000</code>?
+      <div className="space-y-3">
+        <div className="text-muted-foreground text-sm">
+          {error ?? "Could not load dashboard."} Is the API running on{" "}
+          <code className="text-foreground/60 bg-muted px-1.5 py-0.5 rounded text-xs">localhost:8000</code>?
+        </div>
+        <button
+          type="button"
+          onClick={loadDashboard}
+          className="inline-flex items-center rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:bg-accent transition-colors"
+        >
+          Retry
+        </button>
       </div>
     );
   }
 
   const { macro, vix, indices, upcoming_events } = data;
+  const breadth = data.breadth;
+  const sectorIndices = data.sector_indices;
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-6">
       <div className="animate-fade-in-up">
         <h1 className="text-xl font-semibold text-foreground">Dashboard</h1>
         <p className="text-muted-foreground text-sm mt-0.5">
@@ -111,22 +133,32 @@ export default function DashboardPage() {
             <p className="text-2xl font-mono font-semibold text-foreground">
               {fmtNum(vix.india_vix, 1)}
             </p>
+            {breadth?.india_vix_change_pct != null && (
+              <p
+                className={`text-xs font-medium mt-1 ${breadth.india_vix_change_pct >= 0 ? "text-negative" : "text-positive"
+                  }`}
+              >
+                {fmtPct(breadth.india_vix_change_pct)} today
+              </p>
+            )}
           </CardContent>
         </Card>
 
-        {/* US VIX — Phase 2 (US market) */}
-        {/* <Card className="bg-card border-border card-hover animate-fade-in-up stagger-3">
+        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-3">
           <CardHeader className="pb-2 pt-4 px-4">
-            <CardTitle className="text-xs text-muted-foreground font-normal">US VIX</CardTitle>
+            <CardTitle className="text-xs text-muted-foreground font-normal">Advance / Decline</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4">
             <p className="text-2xl font-mono font-semibold text-foreground">
-              {fmtNum(vix.us_vix, 1)}
+              {fmtNum(breadth?.advance_decline_ratio, 2)}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {breadth?.advances ?? "—"} adv · {breadth?.declines ?? "—"} dec · {breadth?.unchanged ?? "—"} unchanged
             </p>
           </CardContent>
-        </Card> */}
+        </Card>
 
-        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-3">
+        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-4">
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-xs text-muted-foreground font-normal flex items-center gap-1.5">
               <DollarSign className="h-3.5 w-3.5" /> USD / INR
@@ -180,13 +212,34 @@ export default function DashboardPage() {
                   </p>
                   {idx.change_1d_pct !== null && idx.change_1d_pct !== undefined && (
                     <p
-                      className={`text-xs font-medium mt-0.5 ${
-                        idx.change_1d_pct >= 0 ? "text-positive" : "text-negative"
-                      }`}
+                      className={`text-xs font-medium mt-0.5 ${idx.change_1d_pct >= 0 ? "text-positive" : "text-negative"
+                        }`}
                     >
                       {fmtPct(idx.change_1d_pct)} today
                     </p>
                   )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sectorIndices.length > 0 && (
+        <div className="animate-fade-in-up" style={{ animationDelay: "360ms" }}>
+          <h2 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-1.5">
+            <TrendingUp className="h-4 w-4" /> Sector Indices
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {sectorIndices.map((idx, i) => (
+              <Card key={idx.name} className="bg-card border-border card-hover animate-fade-in-up" style={{ animationDelay: `${(i + 10) * 40}ms` }}>
+                <CardContent className="px-4 py-4">
+                  <p className="text-xs text-muted-foreground mb-1">{idx.name}</p>
+                  <p className="text-lg font-mono text-foreground">
+                    {idx.value === null || idx.value === undefined
+                      ? "—"
+                      : idx.value.toLocaleString("en-IN")}
+                  </p>
                 </CardContent>
               </Card>
             ))}

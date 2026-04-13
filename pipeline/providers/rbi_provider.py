@@ -1,28 +1,27 @@
-"""RBI DBIE scraper for India macro data.
+"""Official India macro provider.
 
-F-1.6: fetches RBI repo rate and India CPI from RBI's public DBIE portal.
-DBIE has no official API — we scrape the JSON endpoints that power their
-charts. These endpoints are stable but unofficial; the scraper includes
-a fallback that returns the last cached value if the source changes.
+This provider now uses:
+- RBI's public home page for the current policy repo rate
+- MoSPI's public CPI API for India CPI YoY
 
-Endpoints used:
-- Repo rate: https://dbie.rbi.org.in/DBIE/dbie.rbi?site=publications (series)
-- India CPI: https://dbie.rbi.org.in (separate series endpoint)
-
-In practice, RBI data changes monthly at most. TTL is set to 24h.
-
-Note: if DBIE changes its endpoint structure, update _REPO_RATE_URL and
-_CPI_URL here. The caching layer means this won't break a run mid-stream.
+The old DBIE JSON path is no longer reliable. MoSPI's CPI endpoint currently
+requires legacy TLS negotiation that Python's stdlib/client stack rejects in
+some environments, so CPI requests are fetched through `curl` and then parsed.
+Results are cached for 24 hours and empty payloads are not cached.
 """
 from __future__ import annotations
 
+import json
 import re
-from datetime import date, datetime, timedelta
+import subprocess
+from datetime import date, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
+import requests
+from bs4 import BeautifulSoup
 from loguru import logger
 
-from pipeline.providers._http import get_json
 from pipeline.providers.cache import JsonCache
 from pipeline.providers.dto import MacroReading
 from pipeline.providers.errors import DataProviderError
@@ -30,15 +29,30 @@ from pipeline.providers.errors import DataProviderError
 PROVIDER_NAME = "rbi"
 TTL = timedelta(hours=24)
 
-# DBIE REST-like endpoints. Both return JSON when accessed with the right params.
-# If these break, update only here.
-_DBIE_BASE = "https://dbie.rbi.org.in/DBIE/dbie.rbi"
-_REPO_RATE_SERIES_ID = "DP_REPORATE"
-_CPI_SERIES_ID = "DP_CPI_COMBINED_RURAL_URBAN"
+_RBI_HOME_URL = "https://www.rbi.org.in/home.aspx"
+_MOSPI_CPI_URL = "https://api.mospi.gov.in/api/cpi/getCPIIndex"
 
-INDICATOR_MAP = {
-    "INDIA_REPO_RATE": _REPO_RATE_SERIES_ID,
-    "INDIA_CPI_YOY": _CPI_SERIES_ID,
+_MOSPI_COMBINED_SECTOR_CODE = 3
+_MOSPI_GENERAL_GROUP_CODE = 0
+
+_MONTH_CODES = {
+    "January": 1,
+    "February": 2,
+    "March": 3,
+    "April": 4,
+    "May": 5,
+    "June": 6,
+    "July": 7,
+    "August": 8,
+    "September": 9,
+    "October": 10,
+    "November": 11,
+    "December": 12,
+}
+
+_SUPPORTED = {
+    "INDIA_REPO_RATE",
+    "INDIA_CPI_YOY",
 }
 
 
@@ -47,121 +61,172 @@ class RBIProvider:
         self.cache = cache or JsonCache(PROVIDER_NAME)
 
     def get_series(self, indicator: str, start: date, end: date) -> list[MacroReading]:
-        series_id = INDICATOR_MAP.get(indicator)
-        if series_id is None:
+        if indicator not in _SUPPORTED:
             raise ValueError(
                 f"Unknown RBI indicator: '{indicator}'. "
-                f"Valid options: {list(INDICATOR_MAP)}"
+                f"Valid options: {sorted(_SUPPORTED)}"
             )
 
-        cache_args = {"series_id": series_id, "start": str(start), "end": str(end)}
+        cache_args = {"indicator": indicator, "start": str(start), "end": str(end)}
         cached = self.cache.get("series", cache_args, TTL)
-        if cached is not None:
-            logger.debug(f"[rbi] cache hit: {series_id}")
+        if cached:
+            logger.debug(f"[rbi] cache hit: {indicator}")
             return [MacroReading(**r) for r in cached]
 
         try:
-            readings = self._fetch_series(series_id, start, end)
+            if indicator == "INDIA_REPO_RATE":
+                readings = self._fetch_repo_rate_series(start, end)
+            else:
+                readings = self._fetch_cpi_yoy_series(start, end)
         except Exception as exc:
-            logger.warning(f"[rbi] fetch failed for {series_id}: {exc}. Returning empty.")
+            logger.warning(f"[rbi] fetch failed for {indicator}: {exc}. Returning empty.")
             return []
 
-        self.cache.set("series", cache_args, [r.model_dump() for r in readings])
-        logger.debug(f"[rbi] fetched {len(readings)} readings for {series_id}")
+        if readings:
+            self.cache.set("series", cache_args, [r.model_dump() for r in readings])
+            logger.debug(f"[rbi] fetched {len(readings)} readings for {indicator}")
         return readings
 
-    def _fetch_series(self, series_id: str, start: date, end: date) -> list[MacroReading]:
-        """Attempt to pull data from DBIE's internal API. If that fails, parse
-        the RBI publications page for the repo rate as a last resort."""
-        params = {
-            "site": "publications",
-            "seriesCode": series_id,
-            "fromYear": start.year,
-            "toYear": end.year,
-            "outputType": "json",
-        }
-        try:
-            data = get_json(_DBIE_BASE, params=params, timeout=15.0)
-            return _parse_dbie_response(data, series_id, start, end)
-        except Exception as exc:
-            logger.debug(f"[rbi] primary fetch failed ({exc}), trying fallback…")
+    def _fetch_repo_rate_series(self, start: date, end: date) -> list[MacroReading]:
+        response = requests.get(_RBI_HOME_URL, timeout=15.0)
+        response.raise_for_status()
 
-        # Fallback: hit the public publications page and extract the latest figure
-        return self._fallback_scrape(series_id, start, end)
+        rate = _parse_repo_rate(response.text)
+        if rate is None:
+            raise DataProviderError("Could not extract RBI policy repo rate")
 
-    def _fallback_scrape(
-        self, series_id: str, start: date, end: date
-    ) -> list[MacroReading]:
-        """Very lightweight fallback — just gets the current repo rate from
-        RBI's press release page if the DBIE API is down. Returns a single
-        reading dated today."""
-        if series_id != _REPO_RATE_SERIES_ID:
+        as_of = min(date.today(), end)
+        if as_of < start:
             return []
 
-        try:
-            import httpx
-            resp = httpx.get(
-                "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx",
-                timeout=10.0,
-            )
-            # Look for "Repo Rate X.XX per cent" pattern in HTML
-            match = re.search(
-                r"repo rate.*?(\d+\.\d+)\s*per\s*cent", resp.text, re.IGNORECASE
-            )
-            if match:
-                rate = float(match.group(1))
-                return [MacroReading(indicator="INDIA_REPO_RATE", date=date.today(), value=rate)]
-        except Exception as exc:
-            logger.warning(f"[rbi] fallback scrape failed: {exc}")
-        return []
+        return [MacroReading(indicator="INDIA_REPO_RATE", date=as_of, value=rate)]
+
+    def _fetch_cpi_yoy_series(self, start: date, end: date) -> list[MacroReading]:
+        readings: list[MacroReading] = []
+        month_cursor = date(start.year, start.month, 1)
+        month_end = date(end.year, end.month, 1)
+
+        while month_cursor <= month_end:
+            reading = self._fetch_cpi_yoy_month(month_cursor.year, month_cursor.month)
+            if reading is not None:
+                readings.append(reading)
+            month_cursor = _next_month(month_cursor)
+
+        return readings
+
+    def _fetch_cpi_yoy_month(self, year: int, month_code: int) -> MacroReading | None:
+        payload = _mospi_get_json(
+            {
+                "format": "json",
+                "year": year,
+                "month_code": month_code,
+                "sector_code": _MOSPI_COMBINED_SECTOR_CODE,
+                "group_code": _MOSPI_GENERAL_GROUP_CODE,
+                "page": 1,
+            }
+        )
+
+        rows = payload.get("data") or []
+        row = next(
+            (
+                item
+                for item in rows
+                if _is_all_india_general_row(item)
+            ),
+            None,
+        )
+        if row is None:
+            return None
+
+        inflation = _to_float(row.get("inflation"))
+        if inflation is None:
+            return None
+
+        return MacroReading(
+            indicator="INDIA_CPI_YOY",
+            date=date(year, month_code, 1),
+            value=inflation,
+        )
 
 
-def _parse_dbie_response(
-    data: Any, series_id: str, start: date, end: date
-) -> list[MacroReading]:
-    """Parse whatever DBIE returns. Their format has changed before."""
-    if not data:
-        raise DataProviderError("DBIE returned empty response")
+def _mospi_get_json(params: dict[str, Any]) -> dict[str, Any]:
+    url = f"{_MOSPI_CPI_URL}?{urlencode(params)}"
+    try:
+        completed = subprocess.run(
+            [
+                "curl",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--location",
+                "--max-time",
+                "20",
+                url,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise DataProviderError("curl is required to fetch MoSPI CPI data") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
+        raise DataProviderError(f"MoSPI CPI fetch failed: {detail}") from exc
 
-    indicator = next(
-        (k for k, v in INDICATOR_MAP.items() if v == series_id), series_id
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise DataProviderError("MoSPI CPI returned invalid JSON") from exc
+
+    if not isinstance(payload, dict):
+        raise DataProviderError("MoSPI CPI returned an unexpected payload shape")
+    return payload
+
+
+def _is_all_india_general_row(row: dict[str, Any]) -> bool:
+    return (
+        str(row.get("state") or "").strip() == "All India"
+        and str(row.get("sector") or "").strip() == "Combined"
+        and str(row.get("group") or "").strip() == "General"
+        and str(row.get("subgroup") or "").strip() == "General-Overall"
     )
 
-    readings: list[MacroReading] = []
 
-    # Handle list-of-observations format
-    rows = data if isinstance(data, list) else data.get("data") or data.get("observations") or []
-    for row in rows:
-        if not isinstance(row, (list, dict)):
+def _parse_repo_rate(html: str) -> float | None:
+    soup = BeautifulSoup(html, "lxml")
+    for th in soup.find_all("th"):
+        label = th.get_text(" ", strip=True)
+        if "Policy Repo Rate" not in label:
             continue
-        if isinstance(row, list) and len(row) >= 2:
-            date_val, value_val = row[0], row[1]
-        else:
-            date_val = row.get("date") or row.get("period")
-            value_val = row.get("value") or row.get("obs_value")
-
-        parsed_date = _parse_date(date_val)
-        if parsed_date is None or not (start <= parsed_date <= end):
+        td = th.find_next_sibling("td")
+        if td is None:
             continue
-        try:
-            readings.append(
-                MacroReading(indicator=indicator, date=parsed_date, value=float(value_val))
-            )
-        except (TypeError, ValueError):
-            continue
+        return _to_float(td.get_text(" ", strip=True))
 
-    if not readings:
-        raise DataProviderError(f"No usable rows in DBIE response for {series_id}")
-    return readings
+    match = re.search(
+        r"Policy\s*Repo\s*Rate.*?([0-9]+(?:\.[0-9]+)?)\s*%",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return float(match.group(1)) if match else None
 
 
-def _parse_date(val: Any) -> date | None:
-    if not val:
+def _to_float(value: Any) -> float | None:
+    if value is None:
         return None
-    s = str(val).strip()
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%b-%Y", "%B %Y", "%Y"):
-        try:
-            return datetime.strptime(s[:len(fmt)], fmt).date()
-        except ValueError:
-            continue
-    return None
+    text = str(value).strip()
+    if not text or text.lower() == "null":
+        return None
+    match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", text.replace(",", ""))
+    if match is None:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _next_month(current: date) -> date:
+    if current.month == 12:
+        return date(current.year + 1, 1, 1)
+    return date(current.year, current.month + 1, 1)
