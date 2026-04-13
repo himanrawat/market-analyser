@@ -21,7 +21,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <>
       {dashboard?.shock && <ShockBanner shock={dashboard.shock} />}
       <MacroHeader data={dashboard} />
-      <main className="flex-1 overflow-y-auto p-6">{children}</main>
+      <main className="flex-1 overflow-y-auto p-4 md:p-6 pt-14 md:pt-6 scrollbar-thin">
+        {children}
+      </main>
     </>
   );
 }

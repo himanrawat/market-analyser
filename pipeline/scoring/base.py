@@ -6,14 +6,13 @@ fundamentals, and events — scorers themselves never touch the DB or network.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Protocol
 
 import numpy as np
 import pandas as pd
 
+from pipeline.db.enums import Country
 
 # ---------------------------------------------------------------------------
 # Input value object — everything a scorer could need, pre-computed
@@ -25,7 +24,7 @@ class StockData:
     """All the data a scorer needs for one stock. Built by the data assembler."""
 
     ticker: str
-    country: str          # "IN" or "US"
+    country: Country
     sector: str | None
 
     # --- Prices ---
@@ -52,6 +51,16 @@ class StockData:
     # --- Latest price ---
     latest_close: float | None = None
 
+    # --- India-specific market-structure signals ---
+    delivery_pct: float | None = None           # Latest session delivery %
+    put_call_ratio: float | None = None         # F&O PCR (India only)
+    promoter_pledge_pct: float | None = None    # % of promoter shares pledged
+    fii_holding: float | None = None            # Latest FII holding %
+    dii_holding: float | None = None            # Latest DII holding %
+    in_fno_ban: bool = False                    # Currently in F&O ban period
+    in_asm_gsm: bool = False                    # On ASM or GSM surveillance list
+    bulk_deal_signal: str | None = None         # 'buy', 'sell', or None (recent 30d)
+
 
 # ---------------------------------------------------------------------------
 # Output value object
@@ -61,6 +70,7 @@ class StockData:
 @dataclass
 class ScoreOutput:
     ticker: str
+    country: Country
     bucket: str                          # Bucket enum value
     score: float                         # 0–100
     qualified: bool                      # passed all disqualifiers
@@ -242,3 +252,115 @@ def compute_cagr(values: list[float], periods_per_year: int = 4) -> float | None
         return (clean[0] / clean[-1]) ** (1 / n_years) - 1
     except (ZeroDivisionError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# India-specific scoring primitives
+# ---------------------------------------------------------------------------
+
+
+def score_promoter_holding_stable(
+    fundamentals: list[dict],
+    full_pts: float,
+    min_holding: float = 40.0,
+    quarters: int = 8,
+) -> float:
+    """Promoter holding: stable or rising above min_holding gets full points.
+
+    Declining promoter holding is a caution signal in India.
+    """
+    values = [f.get("promoter_holding") for f in fundamentals[:quarters]]
+    values = [v for v in values if v is not None]
+    if not values:
+        return 0.0
+    latest = values[0]
+    if latest < min_holding:
+        return 0.0
+    if len(values) >= 4:
+        trend = latest - values[-1]
+        if trend < -5.0:
+            return full_pts * 0.3    # declining fast — caution
+        if trend >= 0:
+            return full_pts          # stable or rising
+        return full_pts * 0.7        # slight decline
+    return full_pts * 0.5            # not enough history
+
+
+def score_promoter_pledge(pledge_pct: float | None, full_pts: float) -> float:
+    """Low or zero promoter pledge gets full points. High pledge is a risk flag.
+
+    >50% pledge = 0 points (high risk); 0% = full points.
+    """
+    if pledge_pct is None:
+        return full_pts * 0.5     # unknown — partial credit
+    if pledge_pct == 0:
+        return full_pts
+    if pledge_pct >= 50.0:
+        return 0.0
+    return scale(50.0 - pledge_pct, 0.0, 50.0) * full_pts
+
+
+def score_fii_trend(fundamentals: list[dict], full_pts: float, quarters: int = 4) -> float:
+    """Rising FII holding trend over recent quarters = positive signal.
+
+    FII accumulation confirms institutional conviction in an India stock.
+    """
+    values = [f.get("fii_holding") for f in fundamentals[:quarters]]
+    values = [v for v in values if v is not None]
+    if len(values) < 2:
+        return 0.0
+    trend = values[0] - values[-1]   # latest minus oldest in window
+    if trend > 2.0:
+        return full_pts
+    if trend > 0:
+        return full_pts * 0.6
+    if trend < -2.0:
+        return 0.0
+    return full_pts * 0.3
+
+
+def score_delivery_pct(delivery_pct: float | None, full_pts: float) -> float:
+    """High delivery percentage signals genuine positional buying.
+
+    India-specific: >50% delivery = strong signal; <20% = churn, weak signal.
+    """
+    if delivery_pct is None:
+        return 0.0
+    return scale(delivery_pct, 20.0, 60.0) * full_pts
+
+
+def score_pcr(pcr: float | None, full_pts: float) -> float:
+    """Put/call ratio as a sentiment/support overlay.
+
+    PCR 0.7–1.2 = balanced/bullish; PCR > 1.5 = oversold/contrarian buy;
+    PCR < 0.5 = complacent/overbought.
+    """
+    if pcr is None:
+        return 0.0
+    if 0.7 <= pcr <= 1.2:
+        return full_pts
+    if pcr > 1.5:
+        return full_pts * 0.7     # oversold — possible contrarian entry
+    if 0.5 <= pcr < 0.7:
+        return full_pts * 0.4
+    return 0.0
+
+
+def score_bank_asset_quality(gnpa_pct: float | None, full_pts: float) -> float:
+    """Gross NPA % for banks/NBFCs. Lower is better.
+
+    <1% = excellent; >5% = failing.
+    """
+    if gnpa_pct is None:
+        return 0.0
+    return scale(-gnpa_pct, -5.0, -0.5) * full_pts
+
+
+def score_nim(nim_pct: float | None, full_pts: float) -> float:
+    """Net Interest Margin for banks. Higher is better.
+
+    >4% = full; <2% = zero.
+    """
+    if nim_pct is None:
+        return 0.0
+    return scale(nim_pct, 2.0, 4.5) * full_pts

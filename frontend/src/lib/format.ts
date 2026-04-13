@@ -48,9 +48,9 @@ export function bucketColor(bucket: string): string {
     quality_value: "bg-blue-500",
     momentum: "bg-orange-500",
     quality_momentum: "bg-purple-500",
-    dividend_growth: "bg-green-500",
+    dividend_growth: "bg-emerald-500",
   };
-  return map[bucket] ?? "bg-slate-500";
+  return map[bucket] ?? "bg-muted-foreground";
 }
 
 export function bucketBorderColor(bucket: string): string {
@@ -58,28 +58,28 @@ export function bucketBorderColor(bucket: string): string {
     quality_value: "border-blue-500",
     momentum: "border-orange-500",
     quality_momentum: "border-purple-500",
-    dividend_growth: "border-green-500",
+    dividend_growth: "border-emerald-500",
   };
-  return map[bucket] ?? "border-slate-500";
+  return map[bucket] ?? "border-muted";
 }
 
 export function actionColor(action: string): string {
   const normalized = action.toLowerCase();
   const map: Record<string, string> = {
-    buy: "text-green-400 font-bold",
-    add: "text-emerald-400 font-semibold",
-    hold: "text-slate-400",
-    trim: "text-yellow-400 font-semibold",
-    sell: "text-red-400 font-bold",
-    skip_month: "text-yellow-400 font-semibold",
+    buy: "text-positive font-bold",
+    add: "text-emerald-500 font-semibold",
+    hold: "text-muted-foreground",
+    trim: "text-warning font-semibold",
+    sell: "text-negative font-bold",
+    skip_month: "text-warning font-semibold",
   };
-  return map[normalized] ?? "text-slate-400";
+  return map[normalized] ?? "text-muted-foreground";
 }
 
 export function sentimentColor(s: string): string {
-  if (s === "positive") return "text-green-400";
-  if (s === "negative") return "text-red-400";
-  return "text-slate-400";
+  if (s === "positive") return "text-positive";
+  if (s === "negative") return "text-negative";
+  return "text-muted-foreground";
 }
 
 export function regimeLabel(regime: string): string {
@@ -94,9 +94,9 @@ export function regimeLabel(regime: string): string {
 
 export function regimeBadgeClass(regime: string): string {
   const normalized = regime.toLowerCase();
-  if (normalized === "risk_on") return "bg-green-500/20 text-green-400 border-green-500/30";
-  if (normalized === "caution") return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
-  return "bg-red-500/20 text-red-400 border-red-500/30";
+  if (normalized === "risk_on") return "bg-positive/15 text-positive border-positive/30";
+  if (normalized === "caution") return "bg-warning/15 text-warning border-warning/30";
+  return "bg-negative/15 text-negative border-negative/30";
 }
 
 export function countryFlag(country: string): string {

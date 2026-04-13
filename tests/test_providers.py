@@ -96,23 +96,29 @@ class TestJsonCache:
 
 
 class TestYFSymbol:
+    @pytest.mark.india
     def test_india_adds_ns(self) -> None:
         assert _yf_symbol("RELIANCE", Country.INDIA) == "RELIANCE.NS"
 
+    @pytest.mark.india
     def test_india_already_ns(self) -> None:
         assert _yf_symbol("RELIANCE.NS", Country.INDIA) == "RELIANCE.NS"
 
+    @pytest.mark.us
     def test_us_passthrough(self) -> None:
         assert _yf_symbol("AAPL", Country.US) == "AAPL"
 
 
 class TestYFSymbols:
+    @pytest.mark.india
     def test_india_returns_ns_then_bo(self) -> None:
         assert _yf_symbols("RELIANCE", Country.INDIA) == ["RELIANCE.NS", "RELIANCE.BO"]
 
+    @pytest.mark.india
     def test_india_already_suffixed_no_duplicate(self) -> None:
         assert _yf_symbols("RELIANCE.NS", Country.INDIA) == ["RELIANCE.NS"]
 
+    @pytest.mark.us
     def test_us_single_symbol(self) -> None:
         assert _yf_symbols("AAPL", Country.US) == ["AAPL"]
 
@@ -140,6 +146,7 @@ def _make_ohlcv_df() -> pd.DataFrame:
 
 class TestYFinanceProvider:
     @patch("yfinance.download")
+    @pytest.mark.us
     def test_get_daily_ohlcv_returns_bars(self, mock_dl, yf_provider) -> None:
         mock_dl.return_value = _make_ohlcv_df()
         bars = yf_provider.get_daily_ohlcv(
@@ -150,6 +157,7 @@ class TestYFinanceProvider:
         assert bars[2].ticker == "AAPL"
 
     @patch("yfinance.download")
+    @pytest.mark.us
     def test_empty_df_raises_symbol_not_found(self, mock_dl, yf_provider) -> None:
         mock_dl.return_value = pd.DataFrame()
         with pytest.raises(SymbolNotFoundError):
@@ -158,6 +166,7 @@ class TestYFinanceProvider:
             )
 
     @patch("yfinance.download")
+    @pytest.mark.india
     def test_india_ticker_tries_ns_first(self, mock_dl, yf_provider) -> None:
         mock_dl.return_value = _make_ohlcv_df()
         yf_provider.get_daily_ohlcv("RELIANCE", Country.INDIA, date(2026, 4, 1), date(2026, 4, 3))
@@ -165,6 +174,7 @@ class TestYFinanceProvider:
         assert first_call_symbol == "RELIANCE.NS"
 
     @patch("yfinance.download")
+    @pytest.mark.india
     def test_india_ticker_falls_back_to_bo_when_ns_empty(self, mock_dl, yf_provider) -> None:
         # First call (.NS) returns empty; second call (.BO) returns data
         mock_dl.side_effect = [pd.DataFrame(), _make_ohlcv_df()]
@@ -174,6 +184,7 @@ class TestYFinanceProvider:
         assert symbols_tried == ["RELIANCE.NS", "RELIANCE.BO"]
 
     @patch("yfinance.Ticker")
+    @pytest.mark.us
     def test_get_profile(self, mock_ticker_cls, yf_provider) -> None:
         mock_t = MagicMock()
         mock_t.info = {
@@ -196,6 +207,7 @@ class TestYFinanceProvider:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.us
 class TestFMPProvider:
     def test_missing_key_raises(self, fmp_provider) -> None:
         with patch("pipeline.providers.fmp_provider.settings") as mock_settings:
@@ -208,20 +220,20 @@ class TestFMPProvider:
     def test_get_profile(self, mock_get, fmp_provider) -> None:
         mock_get.return_value = [
             {
-                "companyName": "Reliance Industries",
-                "sector": "Energy",
-                "industry": "Oil & Gas",
-                "currency": "INR",
-                "mktCap": 18_000_000_000_000,
-                "ipoDate": "1977-11-29",
-                "description": "Indian conglomerate.",
+                "companyName": "Apple Inc.",
+                "sector": "Technology",
+                "industry": "Consumer Electronics",
+                "currency": "USD",
+                "mktCap": 3_000_000_000_000,
+                "ipoDate": "1980-12-12",
+                "description": "US technology company.",
             }
         ]
         with patch.object(fmp_provider, "_require_key", return_value="fake_key"):
-            profile = fmp_provider.get_profile("RELIANCE", Country.INDIA)
-        assert profile.name == "Reliance Industries"
-        assert profile.sector == "Energy"
-        assert profile.listing_date == date(1977, 11, 29)
+            profile = fmp_provider.get_profile("AAPL", Country.US)
+        assert profile.name == "Apple Inc."
+        assert profile.sector == "Technology"
+        assert profile.listing_date == date(1980, 12, 12)
 
     @patch("pipeline.providers.fmp_provider.get_json")
     def test_get_stock_news_filters_by_since(self, mock_get, fmp_provider) -> None:
@@ -299,6 +311,7 @@ class TestFMPProvider:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.india
 class TestIndiaOfficialProvider:
     def test_get_quarterly_fundamentals_from_nse_json_computes_ratios(
         self,
@@ -533,24 +546,27 @@ class TestDataProvider:
         assert health["newsapi"] is False
 
     @patch("yfinance.download")
+    @pytest.mark.us
     def test_prices_service_delegates_to_yfinance(self, mock_dl) -> None:
         mock_dl.return_value = _make_ohlcv_df()
         dp = DataProvider()
         bars = dp.prices.get_daily_ohlcv("AAPL", Country.US, date(2026, 4, 1), date(2026, 4, 3))
         assert len(bars) == 3
 
+    @pytest.mark.us
     def test_fundamentals_fallback_on_missing_fmp_key(self) -> None:
         """If FMP key is absent, fundamentals should fall back to yfinance."""
         dp = DataProvider()
 
-        with patch.object(dp.fundamentals._fmp, "get_quarterly_fundamentals") as mock_fmp, \
-             patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals") as mock_yf:
+        with patch.object(dp.fundamentals._us_market._fmp, "get_quarterly_fundamentals") as mock_fmp, \
+             patch.object(dp.fundamentals._us_market._yf, "get_quarterly_fundamentals") as mock_yf:
             mock_fmp.side_effect = MissingApiKeyError("fmp", "FMP_API_KEY")
             mock_yf.return_value = []
             result = dp.fundamentals.get_quarterly_fundamentals("AAPL", Country.US)
             mock_yf.assert_called_once()
             assert result == []
 
+    @pytest.mark.india
     def test_india_fundamentals_merge_official_and_vendor(self) -> None:
         official_provider = MagicMock()
         official_provider.get_quarterly_fundamentals.return_value = [
@@ -600,6 +616,7 @@ class TestDataProvider:
         assert merged[0].pb == 3.0
         assert merged[0].payout_ratio == 0.35
 
+    @pytest.mark.india
     def test_india_fundamentals_fall_back_to_vendor_when_official_missing(self) -> None:
         official_provider = MagicMock()
         official_provider.get_quarterly_fundamentals.side_effect = SymbolNotFoundError(
@@ -624,6 +641,7 @@ class TestDataProvider:
         assert len(rows) == 1
         assert rows[0].revenue == 1000.0
 
+    @pytest.mark.india
     def test_india_complete_official_fundamentals_skip_vendor_enrichment(self) -> None:
         official_provider = MagicMock()
         official_provider.get_quarterly_fundamentals.return_value = [
@@ -657,13 +675,14 @@ class TestDataProvider:
         ]
         dp = DataProvider(india_official=official_provider)
 
-        with patch.object(dp.fundamentals, "_get_vendor_fundamentals") as mock_vendor:
+        with patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals") as mock_vendor:
             rows = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
 
         mock_vendor.assert_not_called()
         assert len(rows) == 1
         assert rows[0].pe == 12.0
 
+    @pytest.mark.india
     def test_india_sample_style_official_fundamentals_skip_vendor_enrichment(self) -> None:
         official_provider = MagicMock()
         official_provider.get_quarterly_fundamentals.return_value = [
@@ -692,13 +711,14 @@ class TestDataProvider:
         ]
         dp = DataProvider(india_official=official_provider)
 
-        with patch.object(dp.fundamentals, "_get_vendor_fundamentals") as mock_vendor:
+        with patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals") as mock_vendor:
             rows = dp.fundamentals.get_quarterly_fundamentals("RELIANCE", Country.INDIA)
 
         mock_vendor.assert_not_called()
         assert len(rows) == 1
         assert rows[0].promoter_holding == 52.5
 
+    @pytest.mark.india
     def test_india_vendor_enrichment_failure_after_official_is_silent(self) -> None:
         official_provider = MagicMock()
         official_provider.get_quarterly_fundamentals.return_value = [
@@ -716,7 +736,6 @@ class TestDataProvider:
         dp = DataProvider(india_official=official_provider)
 
         with (
-            patch.object(dp.fundamentals._fmp, "get_quarterly_fundamentals", side_effect=PlanLimitError("fmp", "url")),
             patch.object(dp.fundamentals._yf, "get_quarterly_fundamentals", side_effect=KeyError("Timestamp('2025-12-31 00:00:00')")),
             patch("pipeline.providers.registry.logger.debug") as mock_debug,
             patch("pipeline.providers.registry.logger.warning") as mock_warning,
@@ -752,7 +771,9 @@ class TestDataProvider:
         since = datetime(2026, 4, 1)
 
         with patch.object(dp.news._newsapi, "get_general_news") as mock_newsapi, \
-             patch.object(dp.news._fmp, "get_general_news") as mock_fmp:
+             patch.object(dp.news._fmp, "get_general_news") as mock_fmp, \
+             patch.object(dp.news._fmp, "get_fmp_articles") as mock_articles, \
+             patch.object(dp.news._fmp, "get_stock_news_latest") as mock_stock_latest:
             mock_newsapi.side_effect = MissingApiKeyError("newsapi", "NEWSAPI_KEY")
             mock_fmp.return_value = [
                 NewsArticle(
@@ -764,6 +785,8 @@ class TestDataProvider:
             ]
             articles = dp.news.get_general_news(since)
             mock_fmp.assert_called_once()
+            mock_articles.assert_not_called()
+            mock_stock_latest.assert_not_called()
             assert articles[0].headline == "Rate hike"
 
     def test_macro_routes_yf_indicators(self) -> None:
@@ -773,6 +796,7 @@ class TestDataProvider:
             dp.macro.get_series("INDIA_VIX", date(2026, 1, 1), date(2026, 4, 1))
             mock_yf.assert_called_once_with("INDIA_VIX", date(2026, 1, 1), date(2026, 4, 1))
 
+    @pytest.mark.us
     def test_macro_us_vix_routes_to_fred(self) -> None:
         dp = DataProvider()
         with patch.object(dp.macro._fred, "get_series") as mock_fred, \
@@ -789,6 +813,7 @@ class TestDataProvider:
             dp.macro.get_series("FEDFUNDS", date(2026, 1, 1), date(2026, 4, 1))
             mock_fred.assert_called_once()
 
+    @pytest.mark.india
     def test_macro_routes_rbi_indicators(self) -> None:
         dp = DataProvider()
         with patch.object(dp.macro._rbi, "get_series") as mock_rbi:
@@ -808,6 +833,7 @@ class TestDataProvider:
 
 
 @pytest.mark.live
+@pytest.mark.us
 def test_live_yfinance_aapl() -> None:
     """Hits real yfinance. Run with: pytest -m live"""
     dp = DataProvider()
@@ -819,6 +845,7 @@ def test_live_yfinance_aapl() -> None:
 
 
 @pytest.mark.live
+@pytest.mark.india
 def test_live_yfinance_reliance() -> None:
     dp = DataProvider()
     bars = dp.prices.get_daily_ohlcv(
@@ -829,6 +856,7 @@ def test_live_yfinance_reliance() -> None:
 
 
 @pytest.mark.live
+@pytest.mark.us
 def test_live_fred_us_vix() -> None:
     """US VIX now comes from FRED (VIXCLS). Run with: pytest -m live"""
     dp = DataProvider()

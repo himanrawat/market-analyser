@@ -15,6 +15,8 @@ from pipeline.importers.india_official import (
     import_official_india_bundle,
 )
 
+pytestmark = pytest.mark.india
+
 
 def test_import_official_india_bundle_filters_and_normalizes_csv(tmp_path: Path) -> None:
     financials = tmp_path / "nse_financials.csv"

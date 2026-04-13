@@ -12,10 +12,12 @@ from pipeline.portfolio.planner import CapitalPlanner, DEFAULT_BUCKET_ALLOCATION
 from pipeline.scoring.base import ScoreOutput
 from pipeline.scoring.guardrails import GuardrailResult
 
+pytestmark = pytest.mark.us
+
 
 def _score(ticker: str, score: float, rank: int = 1, bucket=Bucket.QUALITY_MOMENTUM) -> ScoreOutput:
     return ScoreOutput(
-        ticker=ticker, bucket=bucket, score=score, qualified=True,
+        ticker=ticker, country=Country.US, bucket=bucket, score=score, qualified=True,
         factor_scores={"roe_5yr_avg": 15.0, "momentum_12m_1m": 18.0},
         rank=rank,
     )
@@ -51,7 +53,6 @@ class TestPortfolioDiff:
     def _run(self, diff, guardrail_results, holdings):
         with (
             patch.object(diff, "_load_holdings", return_value=holdings),
-            patch.object(diff, "_ticker_country", return_value=Country.US),
         ):
             return diff.run(guardrail_results)
 
@@ -80,7 +81,7 @@ class TestPortfolioDiff:
         # Cutoff 85, MSFT score 78 → drop 7 < buffer(10) → HOLD
         gr = _gr([_score("AAPL", 85.0, rank=1)])
         msft_score = ScoreOutput(
-            ticker="MSFT", bucket=Bucket.QUALITY_MOMENTUM, score=78.0,
+            ticker="MSFT", country=Country.US, bucket=Bucket.QUALITY_MOMENTUM, score=78.0,
             qualified=False, factor_scores={}, rank=None,
         )
         gr.extended = [msft_score]
@@ -97,7 +98,7 @@ class TestPortfolioDiff:
 
     def test_format_reason_includes_top_factors(self):
         s = ScoreOutput(
-            ticker="AAPL", bucket=Bucket.QUALITY_MOMENTUM, score=82.5,
+            ticker="AAPL", country=Country.US, bucket=Bucket.QUALITY_MOMENTUM, score=82.5,
             qualified=True,
             factor_scores={"roe_5yr_avg": 15.0, "momentum_12m_1m": 18.0, "debt_equity": 8.0},
         )
@@ -149,8 +150,8 @@ class TestCapitalPlanner:
         ]
         plan = planner.plan(actions, fresh_capital=10000.0)
         # QM gets 40% = 4000; split equally between A and B → 2000 each
-        assert abs(plan.action_amounts["A|quality_momentum"] - 2000.0) < 1e-6
-        assert abs(plan.action_amounts["B|quality_momentum"] - 2000.0) < 1e-6
+        assert abs(plan.action_amounts["A|US|quality_momentum"] - 2000.0) < 1e-6
+        assert abs(plan.action_amounts["B|US|quality_momentum"] - 2000.0) < 1e-6
 
     def test_custom_allocation_normalised(self):
         # User passes raw percentages (60, 40) — should still work
@@ -168,4 +169,4 @@ class TestCapitalPlanner:
             ActionRow("A", Country.US, Bucket.QUALITY_MOMENTUM, ActionType.ADD, 85.0, 2),
         ]
         plan = planner.plan(actions, fresh_capital=10000.0)
-        assert "A|quality_momentum" in plan.action_amounts
+        assert "A|US|quality_momentum" in plan.action_amounts

@@ -2,6 +2,10 @@
 
 This is the Next.js frontend for Market Analyser.
 
+Current priority note:
+- frontend work that supports the Indian market remains active
+- US market-specific frontend enhancements are on hold until the Indian market implementation is complete
+
 ## What lives here
 
 - dashboard
@@ -38,5 +42,6 @@ Set `NEXT_PUBLIC_API_URL` in `frontend/.env.local` if the API is not running on 
 
 ## Notes
 
-- The root project documentation is in [../README.md](../README.md).
-- PRD mapping and verification notes are in [../docs/IMPLEMENTATION_STATUS.md](../docs/IMPLEMENTATION_STATUS.md).
+- The root project landing page is in [../README.md](../README.md).
+- The centralized documentation index is in [./README.md](./README.md).
+- PRD mapping and verification notes are in [./IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md).

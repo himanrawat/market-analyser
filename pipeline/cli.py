@@ -38,6 +38,15 @@ def _bootstrap() -> None:
     configure_logging()
 
 
+def _run_pytest(args: list[str]) -> None:
+    try:
+        import pytest
+    except ImportError as exc:  # pragma: no cover - only happens without dev deps
+        raise typer.BadParameter("pytest is not installed. Install dev dependencies first.") from exc
+
+    raise typer.Exit(pytest.main(args))
+
+
 @app.command("init-db")
 def init_db_cmd() -> None:
     """Create all tables. Idempotent."""
@@ -225,6 +234,24 @@ def fetch_india_official_batch_cmd(
         f"Fetched official India batch: {len(result.completed)} succeeded, "
         f"{len(result.failed)} failed"
     )
+
+
+@app.command("test-india")
+def test_india_cmd() -> None:
+    """Run India-only backend tests."""
+    _run_pytest(["-m", "india and not live"])
+
+
+@app.command("test-us")
+def test_us_cmd() -> None:
+    """Run US-only backend tests."""
+    _run_pytest(["-m", "us and not live"])
+
+
+@app.command("test-markets")
+def test_markets_cmd() -> None:
+    """Run both India and US backend tests together."""
+    _run_pytest(["-m", "(india or us) and not live"])
 
 
 if __name__ == "__main__":

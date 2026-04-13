@@ -40,7 +40,7 @@ class DeploymentPlan(BaseModel):
     sell_proceeds: float
     total_available: float
     bucket_allocations: list[BucketAllocation]
-    action_amounts: dict[str, float]   # "<ticker>|<bucket>" → amount
+    action_amounts: dict[str, float]   # "<ticker>|<country>|<bucket>" → amount
     undeployed: float
 
 

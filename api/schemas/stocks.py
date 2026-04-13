@@ -119,6 +119,10 @@ class StockDetailResponse(BaseModel):
     description: Optional[str] = None
     market_cap: Optional[float]
     current_price: Optional[float]
+    isin: Optional[str] = None
+    nse_symbol: Optional[str] = None
+    bse_symbol: Optional[str] = None
+    bse_scripcode: Optional[str] = None
 
     # Tabs
     fundamentals: Optional[FundamentalData]

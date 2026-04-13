@@ -1,0 +1,55 @@
+{
+  "imported_at": "2026-04-13T05:21:22.736229",
+  "shareholding": [
+    {
+      "as_of_date": "31-DEC-2025",
+      "broadcast_date": "16-JAN-2026 15:55:55",
+      "company_name": "Anthem Biosciences Limited",
+      "employee_trusts_pct": 0.0,
+      "new_column": true,
+      "promoter_pct": 74.69,
+      "public_pct": 25.31,
+      "record_id": "205794",
+      "remarks_web": "N",
+      "revised_data": "N",
+      "submission_date": "16-JAN-2026",
+      "symbol": "ANTHEM",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_1602285_16012026035550_WEB.xml"
+    },
+    {
+      "as_of_date": "30-SEP-2025",
+      "broadcast_date": "19-OCT-2025 14:31:58",
+      "company_name": "Anthem Biosciences Limited",
+      "employee_trusts_pct": 0.0,
+      "new_column": true,
+      "promoter_pct": 74.69,
+      "public_pct": 25.31,
+      "record_id": "203967",
+      "remarks_web": "N",
+      "revised_data": "N",
+      "submission_date": "19-OCT-2025",
+      "symbol": "ANTHEM",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_1554078_19102025023153_WEB.xml"
+    },
+    {
+      "as_of_date": "18-JUL-2025",
+      "broadcast_date": "23-JUL-2025 20:47:59",
+      "company_name": "Anthem Biosciences Limited",
+      "employee_trusts_pct": 0.0,
+      "new_column": true,
+      "promoter_pct": 74.69,
+      "public_pct": 25.31,
+      "record_id": "200862",
+      "remarks_web": "N",
+      "revised_data": "Revised",
+      "revision_date": "21-JUL-2025",
+      "submission_date": "21-JUL-2025",
+      "symbol": "ANTHEM",
+      "xbrl": "https://nsearchives.nseindia.com/corporate/xbrl/SHP_1489556_21072025071113_WEB.xml"
+    }
+  ],
+  "source": "nse",
+  "source_file": null,
+  "source_reference": "https://www.nseindia.com/api/corporate-share-holdings-master",
+  "ticker": "ANTHEM"
+}

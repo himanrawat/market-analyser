@@ -29,7 +29,7 @@ class DeploymentPlan:
 
     total_available: float              # fresh_capital + sell_proceeds
     bucket_allocations: dict[Bucket, float]  # bucket → amount allocated
-    action_amounts: dict[str, float]    # "<ticker>|<bucket>" → suggested amount
+    action_amounts: dict[str, float]    # "<ticker>|<country>|<bucket>" → suggested amount
     undeployed: float                   # leftover if no BUY/ADD in a bucket
 
 

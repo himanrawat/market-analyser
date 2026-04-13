@@ -16,10 +16,13 @@ from pipeline.scoring.guardrails import (
     compute_macro_regime,
 )
 
+pytestmark = pytest.mark.us
+
 
 def _score(ticker: str, score: float, qualified: bool = True, bucket: Bucket = Bucket.QUALITY_MOMENTUM) -> ScoreOutput:
     return ScoreOutput(
         ticker=ticker,
+        country=Country.US,
         bucket=bucket,
         score=score,
         qualified=qualified,
@@ -33,7 +36,7 @@ def guardrails():
     g = Guardrails(picks_per_bucket=3, as_of=date(2026, 4, 7))
     # Patch DB calls to return empty sets
     with (
-        patch.object(g, "_load_held_tickers", return_value=set()),
+        patch.object(g, "_load_held_keys", return_value=set()),
         patch.object(g, "_load_upcoming_earnings", return_value=set()),
         patch.object(g, "_load_sectors", return_value={}),
     ):
@@ -58,10 +61,11 @@ class TestComputeMacroRegime:
 class TestGuardrails:
     def _apply(self, g: Guardrails, scores, held=None, earnings=None, sectors=None):
         """Helper to apply guardrails with controlled DB state."""
+        sector_map = sectors or {}
         with (
-            patch.object(g, "_load_held_tickers", return_value=held or set()),
+            patch.object(g, "_load_held_keys", return_value=held or set()),
             patch.object(g, "_load_upcoming_earnings", return_value=earnings or set()),
-            patch.object(g, "_load_sectors", return_value=sectors or {}),
+            patch.object(g, "_load_sectors", return_value=sector_map),
         ):
             return g._apply_one(
                 scores,
@@ -69,7 +73,7 @@ class TestGuardrails:
                 Country.US,
                 held or set(),
                 earnings or set(),
-                sectors or {},
+                sector_map,
                 MacroRegime.RISK_ON,
                 False,
             )
@@ -99,17 +103,17 @@ class TestGuardrails:
 
     def test_earnings_blackout_removes_ticker(self, guardrails):
         scores = [_score(f"T{i}", 100.0 - i) for i in range(5)]
-        result = self._apply(guardrails, scores, earnings={"T0"})
+        result = self._apply(guardrails, scores, earnings={("T0", Country.US)})
         top_tickers = [s.ticker for s in result.ranked]
         assert "T0" not in top_tickers
         assert "T0" in result.removed_by_blackout
 
     def test_sector_cap_enforced(self, guardrails):
         # 5 stocks all in same sector → only SECTOR_CAP=3 in top N
-        sectors = {f"T{i}": "Technology" for i in range(5)}
+        sectors = {(f"T{i}", Country.US): "Technology" for i in range(5)}
         scores = [_score(f"T{i}", 100.0 - i) for i in range(5)]
         result = self._apply(guardrails, scores, sectors=sectors)
-        tech_in_top = [s for s in result.ranked if sectors.get(s.ticker) == "Technology"]
+        tech_in_top = [s for s in result.ranked if sectors.get((s.ticker, s.country)) == "Technology"]
         assert len(tech_in_top) <= SECTOR_CAP
 
     def test_hysteresis_keeps_held_stock_near_cutoff(self, guardrails):
@@ -122,7 +126,7 @@ class TestGuardrails:
             _score("T3", 62.0),   # 62 = 70-8 → within buffer (buffer=10) → stays if held
         ]
         # T3 is held and score=62, cutoff=70 → drop = 8 pts < HYSTERESIS_BUFFER(10) → keep
-        result = self._apply(guardrails, scores, held={"T3"})
+        result = self._apply(guardrails, scores, held={("T3", Country.US)})
         all_tickers = {s.ticker for s in result.ranked + result.extended}
         assert "T3" in all_tickers
 
@@ -134,7 +138,7 @@ class TestGuardrails:
             _score("T2", 70.0),   # cutoff = 70
             _score("T3", 50.0),   # 50 = 70-20 → 20 > buffer(10) → dropped
         ]
-        result = self._apply(guardrails, scores, held={"T3"})
+        result = self._apply(guardrails, scores, held={("T3", Country.US)})
         all_tickers = {s.ticker for s in result.ranked + result.extended}
         assert "T3" not in all_tickers
 

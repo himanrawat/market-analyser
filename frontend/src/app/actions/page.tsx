@@ -184,17 +184,30 @@ export default function ActionsPage() {
   const executedCount =
     data?.rows.filter((row) => normalizeAction(row.action) !== "hold" && row.executed).length ?? 0;
 
-  if (loading) return <p className="text-slate-500 text-sm">Loading actions…</p>;
+  if (loading) {
+    return (
+      <div className="space-y-6 max-w-6xl">
+        <div className="h-6 w-40 skeleton-shimmer rounded" />
+        <Card className="bg-card border-border">
+          <CardContent className="p-4 space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-6 w-full skeleton-shimmer rounded" />
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (!data || data.rows.length === 0) {
     return (
       <div className="space-y-4">
-        <h1 className="text-xl font-semibold text-slate-100">Actions</h1>
-        <p className="text-slate-500 text-sm">
+        <h1 className="text-xl font-semibold text-foreground">Actions</h1>
+        <p className="text-muted-foreground text-sm">
           {emptyStateMessage ?? "No action data."}{" "}
           <br />
           Run the pipeline first:{" "}
-          <code className="text-slate-400">python -m pipeline.cli run</code>
+          <code className="text-foreground/60 bg-muted px-1.5 py-0.5 rounded text-xs">python -m pipeline.cli run</code>
         </p>
       </div>
     );
@@ -202,20 +215,20 @@ export default function ActionsPage() {
 
   return (
     <div className="space-y-6 max-w-6xl">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap animate-fade-in-up">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100 flex items-center gap-2">
-            <Zap className="h-5 w-5 text-yellow-400" /> Monthly Actions
+          <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
+            <Zap className="h-5 w-5 text-warning" /> Monthly Actions
           </h1>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            <p className="text-slate-500 text-sm">
+            <p className="text-muted-foreground text-sm">
               Rebalance date: {data.run_date ? fmtDate(data.run_date) : "—"}
             </p>
             <Badge variant="outline" className={regimeBadgeClass(data.macro_regime)}>
               {regimeLabel(data.macro_regime)}
             </Badge>
             {data.shock_regime && (
-              <Badge variant="outline" className="border-red-700/60 bg-red-500/10 text-red-300">
+              <Badge variant="outline" className="border-negative/50 bg-negative/10 text-negative">
                 Shock Regime
               </Badge>
             )}
@@ -225,7 +238,7 @@ export default function ActionsPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-xs border-slate-700 text-slate-300 gap-1.5"
+            className="h-8 text-xs border-border text-foreground/70 gap-1.5 btn-scale cursor-pointer"
             onClick={handleRefreshPrices}
             disabled={refreshing}
           >
@@ -235,7 +248,7 @@ export default function ActionsPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-xs border-slate-700 text-slate-400 gap-1.5 hover:border-yellow-600 hover:text-yellow-400"
+            className="h-8 text-xs border-border text-muted-foreground gap-1.5 hover:border-warning hover:text-warning btn-scale cursor-pointer"
             onClick={() => setSkipOpen(true)}
           >
             <SkipForward className="h-3.5 w-3.5" />
@@ -245,43 +258,43 @@ export default function ActionsPage() {
       </div>
 
       {data.shock_regime && (
-        <Card className="bg-red-950/30 border-red-900/50">
-          <CardContent className="px-4 py-3 text-sm text-red-200">
+        <Card className="bg-negative/5 border-negative/20 animate-fade-in-up">
+          <CardContent className="px-4 py-3 text-sm text-negative">
             Shock regime is active. Pause new buys for the rest of the month. Do not sell existing
             holdings on the banner alone.
           </CardContent>
         </Card>
       )}
 
-      <Card className="bg-slate-900 border-slate-800">
+      <Card className="bg-card border-border border-l-2 border-l-primary animate-fade-in-up stagger-2">
         <CardHeader className="px-4 pt-4 pb-3">
-          <CardTitle className="text-sm font-semibold text-slate-100">
+          <CardTitle className="text-sm font-semibold text-foreground">
             Capital Deployment Planner
           </CardTitle>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             Executed {executedCount} of {actionableCount} trade actions.
           </p>
         </CardHeader>
         <CardContent className="px-4 pb-4 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <label className="flex items-center gap-4">
-              <span className="text-xs text-slate-500 w-32 shrink-0">Fresh capital</span>
+              <span className="text-xs text-muted-foreground w-32 shrink-0">Fresh capital</span>
               <input
                 type="number"
                 value={freshCapital}
                 onChange={(event) => setFreshCapital(Number(event.target.value))}
-                className="w-36 h-8 rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3 font-mono"
+                className="w-36 h-8 rounded-md bg-muted border border-border text-foreground text-sm px-3 font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                 step={1000}
                 min={0}
               />
             </label>
             <label className="flex items-center gap-4">
-              <span className="text-xs text-slate-500 w-32 shrink-0">SELL proceeds</span>
+              <span className="text-xs text-muted-foreground w-32 shrink-0">SELL proceeds</span>
               <input
                 type="number"
                 value={sellProceeds}
                 onChange={(event) => setSellProceeds(Number(event.target.value))}
-                className="w-36 h-8 rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3 font-mono"
+                className="w-36 h-8 rounded-md bg-muted border border-border text-foreground text-sm px-3 font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                 step={1000}
                 min={0}
               />
@@ -294,7 +307,7 @@ export default function ActionsPage() {
               const amount = Math.round((pct / 100) * (freshCapital + sellProceeds));
               return (
                 <div key={bucket} className="flex items-center gap-4">
-                  <span className="text-xs text-slate-400 w-40 shrink-0">{bucketLabel(bucket)}</span>
+                  <span className="text-xs text-muted-foreground w-40 shrink-0">{bucketLabel(bucket)}</span>
                   <Slider
                     min={0}
                     max={100}
@@ -306,20 +319,20 @@ export default function ActionsPage() {
                     }}
                     className="flex-1"
                   />
-                  <span className="text-xs font-mono text-slate-300 w-10 text-right">{pct}%</span>
-                  <span className="text-xs font-mono text-slate-500 w-20 text-right">
+                  <span className="text-xs font-mono text-foreground/80 w-10 text-right">{pct}%</span>
+                  <span className="text-xs font-mono text-muted-foreground w-20 text-right">
                     {fmtINR(amount)}
                   </span>
                 </div>
               );
             })}
             {totalAllocPct !== 100 && (
-              <p className="text-xs text-yellow-400">
+              <p className="text-xs text-warning">
                 Allocations sum to {totalAllocPct}% and should add up to 100%.
               </p>
             )}
             {data.plan && (
-              <div className="flex items-center gap-4 flex-wrap text-xs text-slate-500 pt-2">
+              <div className="flex items-center gap-4 flex-wrap text-xs text-muted-foreground pt-2">
                 <span>Total available: {fmtINR(data.plan.total)}</span>
                 <span>Undeployed: {fmtINR(data.plan.undeployed)}</span>
               </div>
@@ -328,113 +341,115 @@ export default function ActionsPage() {
         </CardContent>
       </Card>
 
-      <Card className="bg-slate-900 border-slate-800">
+      <Card className="bg-card border-border overflow-hidden animate-fade-in-up stagger-3">
         <CardHeader className="px-4 pt-4 pb-3">
-          <CardTitle className="text-sm font-semibold text-slate-100">Action Table</CardTitle>
+          <CardTitle className="text-sm font-semibold text-foreground">Action Table</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-slate-800 text-slate-600">
-                <th className="text-left px-4 py-2.5 font-normal">Ticker</th>
-                <th className="text-left px-4 py-2.5 font-normal">Bucket</th>
-                <th className="text-right px-4 py-2.5 font-normal">Action</th>
-                <th className="text-right px-4 py-2.5 font-normal">Score</th>
-                <th className="text-right px-4 py-2.5 font-normal">Current</th>
-                <th className="text-right px-4 py-2.5 font-normal">Suggest</th>
-                <th className="text-left px-4 py-2.5 font-normal">Reason</th>
-                <th className="text-center px-4 py-2.5 font-normal">Done</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((row) => {
-                const livePrice = livePrices[row.ticker];
-                const displayPrice = livePrice ?? row.current_price;
-                const displayQty =
-                  row.suggested_amount != null && displayPrice != null && displayPrice > 0
-                    ? row.suggested_amount / displayPrice
-                    : row.suggested_qty;
-                const isHold = normalizeAction(row.action) === "hold";
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="text-left px-4 py-2.5 font-normal">Ticker</th>
+                  <th className="text-left px-4 py-2.5 font-normal">Bucket</th>
+                  <th className="text-right px-4 py-2.5 font-normal">Action</th>
+                  <th className="text-right px-4 py-2.5 font-normal">Score</th>
+                  <th className="text-right px-4 py-2.5 font-normal">Current</th>
+                  <th className="text-right px-4 py-2.5 font-normal">Suggest</th>
+                  <th className="text-left px-4 py-2.5 font-normal">Reason</th>
+                  <th className="text-center px-4 py-2.5 font-normal">Done</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row) => {
+                  const livePrice = livePrices[row.ticker];
+                  const displayPrice = livePrice ?? row.current_price;
+                  const displayQty =
+                    row.suggested_amount != null && displayPrice != null && displayPrice > 0
+                      ? row.suggested_amount / displayPrice
+                      : row.suggested_qty;
+                  const isHold = normalizeAction(row.action) === "hold";
 
-                return (
-                  <tr
-                    key={`${row.ticker}-${row.bucket}`}
-                    className={`border-b border-slate-800/40 last:border-0 transition-colors ${
-                      row.executed ? "opacity-50" : "hover:bg-slate-800/30"
-                    }`}
-                  >
-                    <td className="px-4 py-2.5">
-                      <a
-                        href={`/stocks/${row.ticker}`}
-                        className="text-indigo-400 hover:text-indigo-300 font-mono font-medium"
-                      >
-                        {row.ticker}
-                      </a>
-                      <span className="ml-1 text-slate-600">{countryFlag(row.country)}</span>
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-500">{bucketLabel(row.bucket)}</td>
-                    <td className={`px-4 py-2.5 text-right font-semibold ${actionColor(row.action)}`}>
-                      {actionLabel(row.action)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-slate-300">
-                      {fmtNum(row.score, 1)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-slate-300">
-                      {displayPrice != null ? fmtNum(displayPrice, 2) : "—"}
-                      {livePrice != null && (
-                        <Badge
-                          variant="outline"
-                          className="ml-1 text-[10px] border-green-800 text-green-500 px-1 py-0"
+                  return (
+                    <tr
+                      key={`${row.ticker}-${row.bucket}`}
+                      className={`border-b border-border/40 last:border-0 transition-colors duration-150 ${
+                        row.executed ? "opacity-50" : "hover:bg-accent/50"
+                      }`}
+                    >
+                      <td className="px-4 py-2.5">
+                        <a
+                          href={`/stocks/${row.ticker}`}
+                          className="text-primary hover:text-primary/80 font-mono font-medium transition-colors cursor-pointer"
                         >
-                          live
-                        </Badge>
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-slate-400">
-                      {row.suggested_amount != null ? (
-                        <div>
-                          <div>{fmtINR(row.suggested_amount)}</div>
-                          {displayQty != null && (
-                            <div className="text-[10px] text-slate-500">{fmtNum(displayQty, 2)} qty</div>
-                          )}
-                        </div>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-500 max-w-sm">
-                      <p className="truncate" title={row.reason}>
-                        {row.reason}
-                      </p>
-                    </td>
-                    <td className="px-4 py-2.5 text-center">
-                      {!isHold && (
-                        <button
-                          onClick={() => openExecuteDialog(row)}
-                          disabled={row.executed}
-                          className={`transition-colors ${
-                            row.executed ? "text-green-400" : "text-slate-600 hover:text-green-400"
-                          }`}
-                          title={row.executed ? "Executed" : "Mark as executed"}
-                        >
-                          <CheckSquare className="h-4 w-4" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                          {row.ticker}
+                        </a>
+                        <span className="ml-1 text-muted-foreground">{countryFlag(row.country)}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground">{bucketLabel(row.bucket)}</td>
+                      <td className={`px-4 py-2.5 text-right font-semibold ${actionColor(row.action)}`}>
+                        {actionLabel(row.action)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-foreground/80">
+                        {fmtNum(row.score, 1)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-foreground/80">
+                        {displayPrice != null ? fmtNum(displayPrice, 2) : "—"}
+                        {livePrice != null && (
+                          <Badge
+                            variant="outline"
+                            className="ml-1 text-[10px] border-positive/50 text-positive px-1 py-0"
+                          >
+                            live
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-muted-foreground">
+                        {row.suggested_amount != null ? (
+                          <div>
+                            <div>{fmtINR(row.suggested_amount)}</div>
+                            {displayQty != null && (
+                              <div className="text-[10px] text-muted-foreground">{fmtNum(displayQty, 2)} qty</div>
+                            )}
+                          </div>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground max-w-sm">
+                        <p className="truncate" title={row.reason}>
+                          {row.reason}
+                        </p>
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        {!isHold && (
+                          <button
+                            onClick={() => openExecuteDialog(row)}
+                            disabled={row.executed}
+                            className={`transition-all duration-200 cursor-pointer ${
+                              row.executed ? "text-positive scale-110" : "text-muted-foreground hover:text-positive hover:scale-110"
+                            }`}
+                            title={row.executed ? "Executed" : "Mark as executed"}
+                          >
+                            <CheckSquare className="h-4 w-4" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
 
       <Dialog open={skipOpen} onOpenChange={setSkipOpen}>
-        <DialogContent className="bg-slate-900 border-slate-700 text-slate-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
-            <DialogTitle className="text-slate-100">Skip This Month</DialogTitle>
+            <DialogTitle className="text-foreground">Skip This Month</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-muted-foreground">
             This logs a deliberate no-trade month in the journal. The rule still applies: pause new
             buys when conditions are unclear, but do not sell existing holdings because of a banner alone.
           </p>
@@ -443,15 +458,15 @@ export default function ActionsPage() {
             onChange={(event) => setSkipReason(event.target.value)}
             placeholder="Why are you skipping this month? (required)"
             rows={3}
-            className="w-full rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3 py-2 resize-none"
+            className="w-full rounded-md bg-muted border border-border text-foreground text-sm px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
           />
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="sm" className="text-slate-400" onClick={() => setSkipOpen(false)}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground cursor-pointer" onClick={() => setSkipOpen(false)}>
               Cancel
             </Button>
             <Button
               size="sm"
-              className="bg-yellow-600 hover:bg-yellow-500 text-white"
+              className="bg-warning text-warning-foreground hover:bg-warning/90 btn-scale cursor-pointer"
               onClick={handleSkip}
               disabled={!skipReason.trim()}
             >
@@ -467,7 +482,7 @@ export default function ActionsPage() {
           if (!open) setExecuteRow(null);
         }}
       >
-        <DialogContent className="bg-slate-900 border-slate-700 text-slate-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>
               {executeRow ? `${actionLabel(executeRow.action)} ${executeRow.ticker}` : "Execute trade"}
@@ -475,58 +490,58 @@ export default function ActionsPage() {
           </DialogHeader>
           {executeRow && (
             <div className="space-y-3">
-              <p className="text-sm text-slate-400">
+              <p className="text-sm text-muted-foreground">
                 {bucketLabel(executeRow.bucket)} · {countryFlag(executeRow.country)}
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="space-y-1">
-                  <span className="text-xs text-slate-500">Actual fill price</span>
+                  <span className="text-xs text-muted-foreground">Actual fill price</span>
                   <input
                     type="number"
                     value={fillPrice}
                     onChange={(event) => setFillPrice(event.target.value)}
-                    className="w-full h-9 rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3"
+                    className="w-full h-9 rounded-md bg-muted border border-border text-foreground text-sm px-3 focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                   />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-xs text-slate-500">Quantity</span>
+                  <span className="text-xs text-muted-foreground">Quantity</span>
                   <input
                     type="number"
                     value={qty}
                     onChange={(event) => setQty(event.target.value)}
-                    className="w-full h-9 rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3"
+                    className="w-full h-9 rounded-md bg-muted border border-border text-foreground text-sm px-3 focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                   />
                 </label>
               </div>
               <label className="space-y-1 block">
-                <span className="text-xs text-slate-500">Notes</span>
+                <span className="text-xs text-muted-foreground">Notes</span>
                 <textarea
                   value={notes}
                   onChange={(event) => setNotes(event.target.value)}
                   rows={2}
-                  className="w-full rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3 py-2 resize-none"
+                  className="w-full rounded-md bg-muted border border-border text-foreground text-sm px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                 />
               </label>
               {["sell", "trim"].includes(normalizeAction(executeRow.action)) && (
                 <label className="space-y-1 block">
-                  <span className="text-xs text-indigo-300">What did you learn?</span>
+                  <span className="text-xs text-primary">What did you learn?</span>
                   <textarea
                     value={lesson}
                     onChange={(event) => setLesson(event.target.value)}
                     rows={2}
                     placeholder="Required for exits."
-                    className="w-full rounded-md bg-slate-800 border border-indigo-800 text-slate-100 text-sm px-3 py-2 resize-none"
+                    className="w-full rounded-md bg-muted border border-primary/30 text-foreground text-sm px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                   />
                 </label>
               )}
-              {actionError && <p className="text-sm text-red-400">{actionError}</p>}
+              {actionError && <p className="text-sm text-negative">{actionError}</p>}
               <div className="flex justify-end gap-2">
-                <Button variant="ghost" size="sm" className="text-slate-400" onClick={() => setExecuteRow(null)}>
+                <Button variant="ghost" size="sm" className="text-muted-foreground cursor-pointer" onClick={() => setExecuteRow(null)}>
                   Cancel
                 </Button>
                 <Button
                   size="sm"
-                  className="bg-indigo-600 hover:bg-indigo-500"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 btn-scale cursor-pointer"
                   onClick={handleExecute}
                   disabled={submitting}
                 >

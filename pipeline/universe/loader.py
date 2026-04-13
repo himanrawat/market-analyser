@@ -13,11 +13,9 @@ idempotent and can be re-run at any time.
 from __future__ import annotations
 
 from datetime import date
-from typing import Sequence
 
 from loguru import logger
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from pipeline.db.base import get_session
 from pipeline.db.enums import Country, IndexName
@@ -26,8 +24,8 @@ from pipeline.providers.dto import UniverseConstituent
 from pipeline.providers.registry import DataProvider, get_data_provider
 from pipeline.universe.sources import fetch_constituents
 
-# The two indexes we trade against (F-1.1, F-11.2)
-DEFAULT_INDEXES = [IndexName.NIFTY_500, IndexName.SP_500]
+# Phase 1: India market only. SP_500 will be re-added in Phase 2 (US market).
+DEFAULT_INDEXES = [IndexName.NIFTY_500]
 
 
 class UniverseLoader:
@@ -115,7 +113,7 @@ class UniverseLoader:
             # 2. Upsert each constituent
             upserted = 0
             for c in constituents:
-                stock = self._upsert_stock(session, c)
+                self._upsert_stock(session, c)
                 self._upsert_membership(session, index_name, c, today)
                 upserted += 1
 
@@ -142,6 +140,10 @@ class UniverseLoader:
                 industry=c.industry,
                 currency="INR" if c.country == Country.INDIA else "USD",
                 is_active=True,
+                isin=c.isin,
+                nse_symbol=c.nse_symbol,
+                bse_symbol=c.bse_symbol,
+                bse_scripcode=c.bse_scripcode,
             )
             session.add(stock)
             logger.debug(f"New stock: {c.ticker} ({c.country})")
@@ -153,6 +155,14 @@ class UniverseLoader:
                 existing.sector = c.sector
             if c.industry and c.industry != existing.industry:
                 existing.industry = c.industry
+            if c.isin and c.isin != existing.isin:
+                existing.isin = c.isin
+            if c.nse_symbol and c.nse_symbol != existing.nse_symbol:
+                existing.nse_symbol = c.nse_symbol
+            if c.bse_symbol and c.bse_symbol != existing.bse_symbol:
+                existing.bse_symbol = c.bse_symbol
+            if c.bse_scripcode and c.bse_scripcode != existing.bse_scripcode:
+                existing.bse_scripcode = c.bse_scripcode
             existing.is_active = True
             stock = existing
         return stock
@@ -223,7 +233,17 @@ class UniverseLoader:
                         s.description = profile.description
                         if profile.sector and not s.sector:
                             s.sector = profile.sector
+                        if profile.industry and not s.industry:
+                            s.industry = profile.industry
                         if profile.currency:
                             s.currency = profile.currency
+                        if profile.isin and not s.isin:
+                            s.isin = profile.isin
+                        if profile.nse_symbol and not s.nse_symbol:
+                            s.nse_symbol = profile.nse_symbol
+                        if profile.bse_symbol and not s.bse_symbol:
+                            s.bse_symbol = profile.bse_symbol
+                        if profile.bse_scripcode and not s.bse_scripcode:
+                            s.bse_scripcode = profile.bse_scripcode
             except Exception as exc:
                 logger.warning(f"Profile fetch failed for {stock.ticker}: {exc}")

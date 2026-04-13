@@ -12,6 +12,7 @@ existing FMP/yfinance lane.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -43,17 +44,22 @@ class IndiaOfficialFundamentalsProvider:
         if not rows:
             raise SymbolNotFoundError(ticker, PROVIDER_NAME)
 
-        promoter_rows, _ = self._load_rows("shareholding", ticker)
-        promoter_history = _parse_promoter_history(promoter_rows)
+        shareholding_rows, _ = self._load_rows("shareholding", ticker)
+        promoter_history = _parse_promoter_history(shareholding_rows)
+        shareholding_details = _parse_shareholding_detail(shareholding_rows)
 
         snapshots = [
             snapshot
             for snapshot in (
-                _row_to_snapshot(ticker, country, row, promoter_history)
+                _row_to_snapshot(ticker, country, row, promoter_history, shareholding_details)
                 for row in rows
             )
             if snapshot is not None
         ]
+
+        # Data quality: deduplicate quarters (keep first/most-complete occurrence)
+        snapshots = _deduplicate_quarters(snapshots)
+
         if not snapshots:
             raise DataProviderError(
                 f"{PROVIDER_NAME} found files for '{ticker}' but could not parse any quarterly rows."
@@ -140,6 +146,71 @@ def _parse_promoter_history(rows: list[dict[str, Any]]) -> list[tuple[date, floa
     return history
 
 
+# ---------------------------------------------------------------------------
+# Shareholding detail parsing (FII, DII, pledge)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ShareholdingDetail:
+    as_of: date
+    promoter_pct: float | None = None
+    promoter_pledge_pct: float | None = None
+    fii_pct: float | None = None
+    dii_pct: float | None = None
+    public_pct: float | None = None
+
+
+def _parse_shareholding_detail(rows: list[dict[str, Any]]) -> list[_ShareholdingDetail]:
+    """Extract FII, DII, promoter, and pledge breakdown from official shareholding rows."""
+    details: list[_ShareholdingDetail] = []
+    for row in rows:
+        as_of = _parse_date(
+            _first_present(row, "as_of_date", "fiscal_date", "date", "period_end", default=None)
+        )
+        if as_of is None:
+            continue
+
+        promoter_pct = _first_num(row, "promoter_holding", "promoter_pct", "promoter_percentage", "promoters", "promoter")
+        # Pledge — NSE includes this in shareholding master under pr_and_prgrp or pledge fields
+        pledge_pct = _first_num(
+            row,
+            "promoter_pledge_pct",
+            "pledge_pct",
+            "pledgePct",
+            "pledge_percentage",
+            "pledgePercentage",
+        )
+        # FII / DII — from shareholding row if available
+        fii_pct = _first_num(row, "fii", "fii_pct", "foreign_institutional", "fiis", "FII")
+        dii_pct = _first_num(row, "dii", "dii_pct", "domestic_institutional", "diis", "DII", "mutual_funds")
+        public_pct = _first_num(row, "public_pct", "public_val", "public", "public_shareholders")
+
+        details.append(_ShareholdingDetail(
+            as_of=as_of,
+            promoter_pct=promoter_pct,
+            promoter_pledge_pct=pledge_pct,
+            fii_pct=fii_pct,
+            dii_pct=dii_pct,
+            public_pct=public_pct,
+        ))
+
+    details.sort(key=lambda d: d.as_of, reverse=True)
+    return details
+
+
+def _shareholding_for_date(
+    fiscal_date: date,
+    details: list[_ShareholdingDetail],
+) -> _ShareholdingDetail | None:
+    """Return the most recent shareholding detail at or before fiscal_date."""
+    if not details:
+        return None
+    for detail in details:
+        if detail.as_of <= fiscal_date:
+            return detail
+    return details[0]
+
+
 def _promoter_for_date(
     fiscal_date: date,
     history: list[tuple[date, float]],
@@ -157,6 +228,7 @@ def _row_to_snapshot(
     country: Country,
     row: dict[str, Any],
     promoter_history: list[tuple[date, float]],
+    shareholding_details: list[_ShareholdingDetail] | None = None,
 ) -> FundamentalSnapshot | None:
     fiscal_date = _parse_date(
         _first_present(
@@ -286,6 +358,41 @@ def _row_to_snapshot(
     if promoter_holding is None:
         promoter_holding = _promoter_for_date(fiscal_date, promoter_history)
 
+    # FII / DII / pledge — from shareholding detail closest to this fiscal date
+    sh_detail = _shareholding_for_date(fiscal_date, shareholding_details or [])
+    promoter_pledge_pct = _first_num(row, "promoter_pledge_pct", "pledge_pct") or (
+        sh_detail.promoter_pledge_pct if sh_detail else None
+    )
+    fii_holding = _first_num(row, "fii", "fii_pct", "foreign_institutional") or (
+        sh_detail.fii_pct if sh_detail else None
+    )
+    dii_holding = _first_num(row, "dii", "dii_pct", "domestic_institutional") or (
+        sh_detail.dii_pct if sh_detail else None
+    )
+
+    # Consolidated / standalone flag
+    consolidated_raw = _first_present(row, "consolidated", "is_consolidated", "statement_type", default=None)
+    is_consolidated: bool | None = None
+    if consolidated_raw is not None:
+        consolidated_str = str(consolidated_raw).strip().lower()
+        if consolidated_str in ("consolidated", "true", "1", "yes", "con"):
+            is_consolidated = True
+        elif consolidated_str in ("standalone", "false", "0", "no", "std"):
+            is_consolidated = False
+
+    # Data source tag
+    data_source = str(_first_present(row, "source", "data_source", default="nse") or "nse").lower()
+
+    # India sector-specific fields (banks / NBFCs)
+    gnpa_pct = _first_num(row, "gnpa_pct", "gnpa", "gross_npa_pct", "gross_npa_percentage")
+    nnpa_pct = _first_num(row, "nnpa_pct", "nnpa", "net_npa_pct", "net_npa_percentage")
+    nim_pct = _first_num(row, "nim_pct", "nim", "net_interest_margin")
+    casa_ratio = _first_num(row, "casa_ratio", "casa", "casa_pct")
+    credit_cost = _first_num(row, "credit_cost", "credit_cost_pct")
+    capital_adequacy_ratio = _first_num(
+        row, "capital_adequacy_ratio", "car", "crar", "capital_adequacy"
+    )
+
     period = _first_present(row, "period", "period_label", default=None)
     if not period:
         period = f"{fiscal_date.year}Q{((fiscal_date.month - 1) // 3) + 1}"
@@ -316,7 +423,47 @@ def _row_to_snapshot(
         dividend_yield=dividend_yield,
         payout_ratio=payout_ratio,
         promoter_holding=promoter_holding,
+        promoter_pledge_pct=promoter_pledge_pct,
+        fii_holding=fii_holding,
+        dii_holding=dii_holding,
+        is_consolidated=is_consolidated,
+        data_source=data_source,
+        gnpa_pct=gnpa_pct,
+        nnpa_pct=nnpa_pct,
+        nim_pct=nim_pct,
+        casa_ratio=casa_ratio,
+        credit_cost=credit_cost,
+        capital_adequacy_ratio=capital_adequacy_ratio,
     )
+
+
+def _deduplicate_quarters(
+    snapshots: list[FundamentalSnapshot],
+) -> list[FundamentalSnapshot]:
+    """Keep one snapshot per fiscal_date, preferring the more complete row.
+
+    'More complete' = fewer None fields. This handles cases where NSE returns
+    both consolidated and standalone rows for the same period — we keep
+    whichever has more populated fields.
+    """
+    by_date: dict[date, FundamentalSnapshot] = {}
+    for snap in snapshots:
+        existing = by_date.get(snap.fiscal_date)
+        if existing is None:
+            by_date[snap.fiscal_date] = snap
+        else:
+            # Count non-None fields; prefer consolidated over standalone when tied
+            existing_score = sum(
+                1 for f in existing.model_fields if getattr(existing, f) is not None
+            )
+            new_score = sum(
+                1 for f in snap.model_fields if getattr(snap, f) is not None
+            )
+            if new_score > existing_score or (
+                new_score == existing_score and snap.is_consolidated is True
+            ):
+                by_date[snap.fiscal_date] = snap
+    return list(by_date.values())
 
 
 def _first_present(row: dict[str, Any], *keys: str, default: Any = None) -> Any:

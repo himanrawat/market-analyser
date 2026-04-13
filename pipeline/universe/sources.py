@@ -10,7 +10,9 @@ SSGA publishes SPY holdings as a public Excel file updated daily. It contains
 ticker, name, weight, and sector — no API key required. The S&P 100 is derived
 by taking the 100 highest-weight holdings from SPY (same companies, same list).
 
-Sector/industry gaps are backfilled by UniverseLoader via FMP profile calls.
+Sector/industry gaps are backfilled by UniverseLoader via the routed profile
+lane for each market (official India metadata first, vendor-backed US profile
+lane for US stocks).
 """
 from __future__ import annotations
 
@@ -92,8 +94,7 @@ def _fetch_spy_holdings() -> pd.DataFrame:
 def fetch_sp500() -> list[UniverseConstituent]:
     """Load S&P 500 constituent list from SSGA SPY ETF daily holdings file.
 
-    No API key required. Sector gaps are backfilled by FMP profile calls
-    in UniverseLoader._backfill_missing_profiles.
+    No API key required. Sector gaps are backfilled later by UniverseLoader.
     """
     logger.info("Fetching S&P 500 constituents from SSGA SPY holdings…")
     df = _fetch_spy_holdings()
@@ -183,6 +184,8 @@ def fetch_nifty500() -> list[UniverseConstituent]:
                 country=Country.INDIA,
                 name=name,
                 sector=sector,
+                isin=str(row.get("ISIN Code") or "").strip() or None,
+                nse_symbol=ticker,
                 as_of=today,
             )
         )
@@ -226,6 +229,8 @@ def fetch_nifty50() -> list[UniverseConstituent]:
                 country=Country.INDIA,
                 name=name,
                 sector=sector,
+                isin=str(row.get("ISIN Code") or "").strip() or None,
+                nse_symbol=ticker,
                 as_of=today,
             )
         )

@@ -19,9 +19,10 @@ import {
   bucketLabel,
   bucketColor,
   actionColor,
-  countryFlag,
 } from "@/lib/format";
-import { ChevronDown, ChevronUp, Filter } from "lucide-react";
+import { ChevronDown, Filter } from "lucide-react";
+
+const RANKED_COUNTRY = "IN" as const;
 
 const BUCKETS = [
   { value: "quality_value", label: "Quality + Value" },
@@ -45,7 +46,6 @@ export default function RankedPage() {
 
   // Filters
   const [bucket, setBucket] = useState("");
-  const [country, setCountry] = useState("");
   const [sort, setSort] = useState("");
   const [picks, setPicks] = useState(10);
 
@@ -53,26 +53,26 @@ export default function RankedPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const load = useCallback(() => {
-    setLoading(true);
     api
       .ranked({
         bucket: bucket || undefined,
-        country: country || undefined,
+        country: RANKED_COUNTRY,
         pe_sort: sort.startsWith("pe") ? sort : undefined,
         pb_sort: sort.startsWith("pb") ? sort : undefined,
         picks,
       })
       .then((r) => {
-        console.log(`[Ranked] received run_date=${r.run_date} lists=${r.lists.length}`);
-        r.lists.forEach((l) =>
+        const indiaLists = r.lists.filter((list) => list.country === RANKED_COUNTRY);
+        console.log(`[Ranked] received run_date=${r.run_date} lists=${indiaLists.length}`);
+        indiaLists.forEach((l) =>
           console.log(`[Ranked]   ${l.bucket}/${l.country} actionable=${l.actionable.length} extended=${l.extended.length}`)
         );
-        setLists(r.lists);
+        setLists(indiaLists);
         setRunDate(r.run_date);
       })
       .catch((err) => console.error("[Ranked] fetch error:", err))
       .finally(() => setLoading(false));
-  }, [bucket, country, sort, picks]);
+  }, [bucket, sort, picks]);
 
   useEffect(() => {
     load();
@@ -87,65 +87,73 @@ export default function RankedPage() {
     });
   }
 
+  function handleBucketChange(value: string | null) {
+    setLoading(true);
+    setBucket(value ?? "");
+  }
+
+  function handleSortChange(value: string | null) {
+    setLoading(true);
+    setSort(value ?? "");
+  }
+
+  function handlePicksChange(value: string | null) {
+    setLoading(true);
+    setPicks(Number(value ?? picks));
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-4 flex-wrap animate-fade-in-up">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100">Ranked Lists</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
+          <h1 className="text-xl font-semibold text-foreground">Ranked Lists</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
             {runDate ? `Last rebalance run: ${fmtDate(runDate)}` : "No rebalance data yet — run the pipeline first."}
           </p>
         </div>
       </div>
 
       {/* Filter bar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <Filter className="h-4 w-4 text-slate-500 shrink-0" />
-        <Select value={bucket} onValueChange={(v) => setBucket(v ?? "")}>
-          <SelectTrigger className="w-48 h-8 text-xs bg-slate-900 border-slate-700">
+      <div className="flex items-center gap-3 flex-wrap animate-fade-in-up stagger-2">
+        <Filter className="h-4 w-4 text-muted-foreground shrink-0" />
+        <Select value={bucket} onValueChange={handleBucketChange}>
+          <SelectTrigger className="w-48 h-8 text-xs bg-card border-border cursor-pointer">
             <SelectValue placeholder="All buckets" />
           </SelectTrigger>
-          <SelectContent className="bg-slate-900 border-slate-700">
-            <SelectItem value="" className="text-xs">All buckets</SelectItem>
+          <SelectContent className="bg-card border-border">
+            <SelectItem value="" className="text-xs cursor-pointer">All buckets</SelectItem>
             {BUCKETS.map((b) => (
-              <SelectItem key={b.value} value={b.value} className="text-xs">
+              <SelectItem key={b.value} value={b.value} className="text-xs cursor-pointer">
                 {b.label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
 
-        <Select value={country} onValueChange={(v) => setCountry(v ?? "")}>
-          <SelectTrigger className="w-36 h-8 text-xs bg-slate-900 border-slate-700">
-            <SelectValue placeholder="Both markets" />
-          </SelectTrigger>
-          <SelectContent className="bg-slate-900 border-slate-700">
-            <SelectItem value="" className="text-xs">Both markets</SelectItem>
-            <SelectItem value="IN" className="text-xs">🇮🇳 India only</SelectItem>
-            <SelectItem value="US" className="text-xs">🇺🇸 US only</SelectItem>
-          </SelectContent>
-        </Select>
+        <Badge variant="secondary" className="h-8 px-3 text-xs font-medium">
+          India only
+        </Badge>
 
-        <Select value={sort} onValueChange={(v) => setSort(v ?? "")}>
-          <SelectTrigger className="w-44 h-8 text-xs bg-slate-900 border-slate-700">
+        <Select value={sort} onValueChange={handleSortChange}>
+          <SelectTrigger className="w-44 h-8 text-xs bg-card border-border cursor-pointer">
             <SelectValue placeholder="Sort: Score" />
           </SelectTrigger>
-          <SelectContent className="bg-slate-900 border-slate-700">
+          <SelectContent className="bg-card border-border">
             {SORTS.map((s) => (
-              <SelectItem key={s.value} value={s.value} className="text-xs">
+              <SelectItem key={s.value} value={s.value} className="text-xs cursor-pointer">
                 {s.label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
 
-        <Select value={String(picks)} onValueChange={(v) => setPicks(Number(v ?? picks))}>
-          <SelectTrigger className="w-28 h-8 text-xs bg-slate-900 border-slate-700">
+        <Select value={String(picks)} onValueChange={handlePicksChange}>
+          <SelectTrigger className="w-28 h-8 text-xs bg-card border-border cursor-pointer">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent className="bg-slate-900 border-slate-700">
+          <SelectContent className="bg-card border-border">
             {[5, 10, 15, 20].map((n) => (
-              <SelectItem key={n} value={String(n)} className="text-xs">
+              <SelectItem key={n} value={String(n)} className="text-xs cursor-pointer">
                 Top {n}
               </SelectItem>
             ))}
@@ -153,26 +161,42 @@ export default function RankedPage() {
         </Select>
       </div>
 
-      {loading && <p className="text-slate-500 text-sm">Loading…</p>}
+      {loading && (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Card key={i} className="bg-card border-border">
+              <CardHeader className="px-4 pt-4 pb-3">
+                <div className="h-4 w-40 skeleton-shimmer rounded" />
+              </CardHeader>
+              <CardContent className="p-4 space-y-2">
+                {Array.from({ length: 5 }).map((_, j) => (
+                  <div key={j} className="h-6 w-full skeleton-shimmer rounded" />
+                ))}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {!loading && lists.length === 0 && (
-        <p className="text-slate-500 text-sm">
-          No ranked data. Run the pipeline first: <code className="text-slate-400">python -m pipeline.cli run</code>
+        <p className="text-muted-foreground text-sm">
+          No India ranked data. Run the pipeline first: <code className="text-foreground/60 bg-muted px-1.5 py-0.5 rounded text-xs">python -m pipeline.cli run</code>
         </p>
       )}
 
       {/* Lists grid */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {lists.map((list) => {
+        {lists.map((list, i) => {
           const key = `${list.bucket}-${list.country}`;
           const isExpanded = expanded.has(key);
           return (
-            <BucketListCard
-              key={key}
-              list={list}
-              isExpanded={isExpanded}
-              onToggleExpand={() => toggleExpanded(key)}
-            />
+            <div key={key} className="animate-fade-in-up" style={{ animationDelay: `${i * 100}ms` }}>
+              <BucketListCard
+                list={list}
+                isExpanded={isExpanded}
+                onToggleExpand={() => toggleExpanded(key)}
+              />
+            </div>
           );
         })}
       </div>
@@ -195,57 +219,56 @@ function BucketListCard({
     : list.actionable;
 
   return (
-    <Card className="bg-slate-900 border-slate-800">
+    <Card className="bg-card border-border overflow-hidden">
       <CardHeader className="px-4 pt-4 pb-3">
         <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
             <span className={`inline-block w-2 h-2 rounded-full ${colorDot}`} />
             {bucketLabel(list.bucket)}
-            <span className="text-slate-500 font-normal">
-              {countryFlag(list.country)} {list.country === "IN" ? "India" : "US"}
+            <span className="text-muted-foreground font-normal">
+              India
             </span>
           </CardTitle>
-          <span className="text-xs text-slate-600">
+          <span className="text-xs text-muted-foreground">
             {list.showing} / {list.total} shown
           </span>
         </div>
       </CardHeader>
       <CardContent className="p-0">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-slate-800 text-slate-600">
-              <th className="text-left px-4 py-2 font-normal w-6">#</th>
-              <th className="text-left px-4 py-2 font-normal">Ticker</th>
-              <th className="text-right px-4 py-2 font-normal">Score</th>
-              <th className="text-right px-4 py-2 font-normal">P/E</th>
-              <th className="text-right px-4 py-2 font-normal">P/B</th>
-              <th className="text-right px-4 py-2 font-normal">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allVisible.map((stock) => (
-              <StockRow key={stock.ticker} stock={stock} />
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left px-4 py-2 font-normal w-6">#</th>
+                <th className="text-left px-4 py-2 font-normal">Ticker</th>
+                <th className="text-right px-4 py-2 font-normal">Score</th>
+                <th className="text-right px-4 py-2 font-normal">P/E</th>
+                <th className="text-right px-4 py-2 font-normal">P/B</th>
+                <th className="text-right px-4 py-2 font-normal">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allVisible.map((stock) => (
+                <StockRow key={stock.ticker} stock={stock} />
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         {list.extended.length > 0 && (
-          <div className="border-t border-slate-800 px-4 py-2">
+          <div className="border-t border-border px-4 py-2">
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 text-xs text-slate-500 hover:text-slate-300 gap-1"
+              className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1 cursor-pointer"
               onClick={onToggleExpand}
             >
-              {isExpanded ? (
-                <>
-                  <ChevronUp className="h-3 w-3" /> Show less
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-3 w-3" /> Show {list.extended.length} more
-                </>
-              )}
+              <span
+                className={`inline-block transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+              >
+                <ChevronDown className="h-3 w-3" />
+              </span>
+              {isExpanded ? "Show less" : `Show ${list.extended.length} more`}
             </Button>
           </div>
         )}
@@ -258,34 +281,34 @@ function StockRow({ stock }: { stock: RankedStock }) {
   const isGrayed = !stock.is_actionable;
   return (
     <tr
-      className={`border-b border-slate-800/40 last:border-0 hover:bg-slate-800/30 transition-colors ${
+      className={`border-b border-border/40 last:border-0 hover:bg-accent/50 transition-colors duration-150 ${
         isGrayed ? "opacity-50" : ""
       }`}
     >
-      <td className="px-4 py-2 text-slate-600">{stock.rank}</td>
+      <td className="px-4 py-2 text-muted-foreground">{stock.rank}</td>
       <td className="px-4 py-2">
         <Link
           href={`/stocks/${stock.ticker}`}
-          className="text-indigo-400 hover:text-indigo-300 font-mono font-medium"
+          className="text-primary hover:text-primary/80 font-mono font-medium transition-colors cursor-pointer"
         >
           {stock.ticker}
         </Link>
         {stock.sector && (
-          <span className="ml-1.5 text-slate-600 truncate max-w-24 inline-block align-middle">
+          <span className="ml-1.5 text-muted-foreground truncate max-w-24 inline-block align-middle">
             {stock.sector}
           </span>
         )}
       </td>
-      <td className="px-4 py-2 text-right font-mono text-slate-200">
+      <td className="px-4 py-2 text-right font-mono text-foreground">
         {fmtNum(stock.score, 1)}
       </td>
-      <td className="px-4 py-2 text-right font-mono text-slate-400">
+      <td className="px-4 py-2 text-right font-mono text-muted-foreground">
         {stock.pe_ratio != null ? fmtNum(stock.pe_ratio, 1) : "—"}
       </td>
-      <td className="px-4 py-2 text-right font-mono text-slate-400">
+      <td className="px-4 py-2 text-right font-mono text-muted-foreground">
         {stock.pb_ratio != null ? fmtNum(stock.pb_ratio, 1) : "—"}
       </td>
-      <td className={`px-4 py-2 text-right font-semibold ${stock.action ? actionColor(stock.action) : "text-slate-600"}`}>
+      <td className={`px-4 py-2 text-right font-semibold ${stock.action ? actionColor(stock.action) : "text-muted-foreground"}`}>
         {stock.action ?? "—"}
       </td>
     </tr>

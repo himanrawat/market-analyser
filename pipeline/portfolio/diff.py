@@ -18,9 +18,9 @@ from sqlalchemy import select
 
 from pipeline.db.base import get_session
 from pipeline.db.enums import ActionType, Bucket, Country
-from pipeline.db.models import Holding, Score, Stock
+from pipeline.db.models import Holding, Stock
 from pipeline.scoring.base import ScoreOutput
-from pipeline.scoring.guardrails import GuardrailResult, HYSTERESIS_BUFFER
+from pipeline.scoring.guardrails import HYSTERESIS_BUFFER, GuardrailResult
 
 # Equal-weight tolerance: if holding value is <70% of equal-weight target → ADD
 UNDERWEIGHT_THRESHOLD = 0.70
@@ -54,7 +54,7 @@ class ActionRow:
 
     @property
     def action_key(self) -> str:
-        return f"{self.ticker}|{self.bucket}"
+        return f"{self.ticker}|{self.country}|{self.bucket}"
 
 
 @dataclass
@@ -92,31 +92,34 @@ class PortfolioDiff:
     def run(self, guardrail_results: list[GuardrailResult]) -> DiffResult:
         """Produce the full action table from all guardrail results."""
         holdings = self._load_holdings()
-        held_tickers = {h["ticker"] for h in holdings}
-        holding_by_ticker = {h["ticker"]: h for h in holdings}
+        held_keys = {(h["ticker"], Country(h["country"])) for h in holdings}
+        holding_by_key = {
+            (h["ticker"], Country(h["country"])): h
+            for h in holdings
+        }
 
         actions: list[ActionRow] = []
 
         for gr in guardrail_results:
-            top_tickers = {s.ticker for s in gr.ranked}
+            top_keys = {(s.ticker, s.country) for s in gr.ranked}
             cutoff = gr.ranked[-1].score if gr.ranked else 0.0
 
             # Stocks in the top-N list
             for score_out in gr.ranked:
                 action = self._action_for_top_n(
-                    score_out, holding_by_ticker, top_tickers
+                    score_out, holding_by_key, top_keys
                 )
                 actions.append(action)
 
             # Held stocks NOT in the top-N — check if SELL or HOLD
-            for ticker in held_tickers:
-                if ticker in top_tickers:
+            for ticker, country in held_keys:
+                if (ticker, country) in top_keys:
                     continue  # already handled above
-                holding = holding_by_ticker[ticker]
+                holding = holding_by_key[(ticker, country)]
                 # Find this stock's score in the guardrail result (may be absent)
-                stock_score = self._find_score(ticker, gr.bucket, guardrail_results)
+                stock_score = self._find_score(ticker, country, gr.bucket, guardrail_results)
                 action = self._action_for_held_not_in_list(
-                    ticker, holding, gr.bucket, gr.country, stock_score, cutoff
+                    ticker, holding, gr.bucket, country, stock_score, cutoff
                 )
                 if action:
                     actions.append(action)
@@ -144,16 +147,15 @@ class PortfolioDiff:
     def _action_for_top_n(
         self,
         score_out: ScoreOutput,
-        holding_by_ticker: dict,
-        top_tickers: set[str],
+        holding_by_key: dict,
+        top_keys: set[tuple[str, Country]],
     ) -> ActionRow:
-        holding = holding_by_ticker.get(score_out.ticker)
-        country = self._ticker_country(score_out.ticker)
+        holding = holding_by_key.get((score_out.ticker, score_out.country))
 
         if holding is None:
             return ActionRow(
                 ticker=score_out.ticker,
-                country=country,
+                country=score_out.country,
                 bucket=score_out.bucket,
                 action=ActionType.BUY,
                 score=score_out.score,
@@ -163,10 +165,10 @@ class PortfolioDiff:
             )
 
         # Held and in top-N: HOLD unless significantly underweight → ADD
-        if self._is_underweight(holding, top_tickers):
+        if self._is_underweight(holding, top_keys):
             return ActionRow(
                 ticker=score_out.ticker,
-                country=country,
+                country=score_out.country,
                 bucket=score_out.bucket,
                 action=ActionType.ADD,
                 score=score_out.score,
@@ -179,7 +181,7 @@ class PortfolioDiff:
 
         return ActionRow(
             ticker=score_out.ticker,
-            country=country,
+            country=score_out.country,
             bucket=score_out.bucket,
             action=ActionType.HOLD,
             score=score_out.score,
@@ -238,7 +240,11 @@ class PortfolioDiff:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _is_underweight(self, holding: dict, top_tickers: set[str]) -> bool:
+    def _is_underweight(
+        self,
+        holding: dict,
+        top_tickers: set[tuple[str, Country]],
+    ) -> bool:
         """True if holding value is < UNDERWEIGHT_THRESHOLD × equal-weight target."""
         if holding["current_value"] is None or holding["portfolio_total"] is None:
             return False
@@ -249,22 +255,19 @@ class PortfolioDiff:
         return holding["current_value"] < equal_weight_value * UNDERWEIGHT_THRESHOLD
 
     def _find_score(
-        self, ticker: str, bucket: Bucket, all_results: list[GuardrailResult]
+        self,
+        ticker: str,
+        country: Country,
+        bucket: Bucket,
+        all_results: list[GuardrailResult],
     ) -> ScoreOutput | None:
         for gr in all_results:
-            if gr.bucket != bucket:
+            if gr.bucket != bucket or gr.country != country:
                 continue
             for s in gr.ranked + gr.extended:
-                if s.ticker == ticker:
+                if s.ticker == ticker and s.country == country:
                     return s
         return None
-
-    def _ticker_country(self, ticker: str) -> Country:
-        with get_session() as session:
-            row = session.execute(
-                select(Stock.country).where(Stock.ticker == ticker)
-            ).scalar_one_or_none()
-        return Country(row) if row else Country.US
 
     def _load_holdings(self) -> list[dict]:
         """Load current holdings with current_value computed from latest price."""
@@ -301,7 +304,7 @@ class PortfolioDiff:
             portfolio_total += current_value
             holdings.append({
                 "ticker": row.ticker,
-                "country": row.country,
+                "country": Country(row.country),
                 "qty": row.quantity,
                 "avg_buy_price": row.avg_buy_price,
                 "current_price": current_price,

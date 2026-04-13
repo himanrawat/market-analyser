@@ -18,13 +18,13 @@ export function ShockBanner({ shock }: Props) {
 
   return (
     <div
-      className={`relative w-full px-4 py-3 flex items-start gap-3 text-sm ${
+      className={`relative w-full px-4 py-3 flex items-start gap-3 text-sm animate-slide-down ${
         isRed
           ? "bg-red-600 text-white"
-          : "bg-yellow-500 text-yellow-950"
+          : "bg-amber-500 text-amber-950"
       }`}
     >
-      <AlertTriangle className="mt-0.5 shrink-0 h-4 w-4" />
+      <AlertTriangle className="mt-0.5 shrink-0 h-4 w-4 animate-pulse" />
       <div className="flex-1 min-w-0">
         <span className="font-semibold">
           {isRed ? "MARKET SHOCK DETECTED" : "MARKET CAUTION"}
@@ -41,7 +41,7 @@ export function ShockBanner({ shock }: Props) {
       </div>
       <button
         onClick={() => setDismissed(true)}
-        className="shrink-0 opacity-70 hover:opacity-100 transition-opacity"
+        className="shrink-0 opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
         title="Dismiss for this session"
       >
         <X className="h-4 w-4" />

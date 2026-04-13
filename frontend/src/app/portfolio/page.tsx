@@ -22,8 +22,8 @@ import {
 import { Plus, Trash2, AlertTriangle, Pencil } from "lucide-react";
 
 const SECTOR_COLORS = [
-  "#6366f1", "#8b5cf6", "#a855f7", "#ec4899", "#f43f5e",
-  "#f97316", "#eab308", "#22c55e", "#14b8a6", "#06b6d4",
+  "#9FE870", "#22C55E", "#06B6D4", "#8B5CF6", "#F43F5E",
+  "#F97316", "#EAB308", "#14B8A6", "#EC4899", "#6366F1",
 ];
 
 export default function PortfolioPage() {
@@ -103,24 +103,40 @@ export default function PortfolioPage() {
     reload();
   }
 
-  if (loading) return <p className="text-slate-500 text-sm">Loading portfolio…</p>;
+  if (loading) {
+    return (
+      <div className="space-y-6 max-w-5xl">
+        <div className="h-6 w-28 skeleton-shimmer rounded" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i} className="bg-card border-border">
+              <CardContent className="px-4 py-3">
+                <div className="h-3 w-16 skeleton-shimmer rounded mb-2" />
+                <div className="h-6 w-24 skeleton-shimmer rounded" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-  if (!data) return <p className="text-slate-500 text-sm">Could not load portfolio.</p>;
+  if (!data) return <p className="text-muted-foreground text-sm">Could not load portfolio.</p>;
 
   const { holdings, summary } = data;
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 animate-fade-in-up">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100">Portfolio</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
+          <h1 className="text-xl font-semibold text-foreground">Portfolio</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
             {holdings.length} holdings
           </p>
         </div>
         <Button
           size="sm"
-          className="h-8 text-xs bg-indigo-600 hover:bg-indigo-500 gap-1.5"
+          className="h-8 text-xs bg-primary text-primary-foreground hover:bg-primary/90 gap-1.5 btn-scale cursor-pointer"
           onClick={openAddDialog}
         >
           <Plus className="h-3.5 w-3.5" /> Add holding
@@ -129,47 +145,47 @@ export default function PortfolioPage() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card className="bg-slate-900 border-slate-800">
+        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-1">
           <CardContent className="px-4 py-3">
-            <p className="text-xs text-slate-500">Total Value</p>
-            <p className="text-xl font-mono text-slate-100">{fmtINR(summary.total_value)}</p>
+            <p className="text-xs text-muted-foreground">Total Value</p>
+            <p className="text-xl font-mono text-foreground">{fmtINR(summary.total_value)}</p>
           </CardContent>
         </Card>
-        <Card className="bg-slate-900 border-slate-800">
+        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-2">
           <CardContent className="px-4 py-3">
-            <p className="text-xs text-slate-500">Total P&L</p>
-            <p className={`text-xl font-mono ${summary.total_pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+            <p className="text-xs text-muted-foreground">Total P&L</p>
+            <p className={`text-xl font-mono ${summary.total_pnl >= 0 ? "text-positive" : "text-negative"}`}>
               {fmtINR(summary.total_pnl)}
             </p>
-            <p className={`text-xs ${summary.total_pnl_pct >= 0 ? "text-green-500" : "text-red-500"}`}>
+            <p className={`text-xs ${summary.total_pnl_pct >= 0 ? "text-positive" : "text-negative"}`}>
               {fmtPct(summary.total_pnl_pct)}
             </p>
           </CardContent>
         </Card>
-        <Card className="bg-slate-900 border-slate-800">
+        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-3">
           <CardContent className="px-4 py-3">
-            <p className="text-xs text-slate-500">🇮🇳 India</p>
-            <p className="text-xl font-mono text-slate-100">{fmtINR(summary.india_value)}</p>
-            <p className="text-xs text-slate-500">{fmtNum(summary.india_pct, 1)}%</p>
+            <p className="text-xs text-muted-foreground">🇮🇳 India</p>
+            <p className="text-xl font-mono text-foreground">{fmtINR(summary.india_value)}</p>
+            <p className="text-xs text-muted-foreground">{fmtNum(summary.india_pct, 1)}%</p>
           </CardContent>
         </Card>
-        <Card className="bg-slate-900 border-slate-800">
+        <Card className="bg-card border-border card-hover animate-fade-in-up stagger-4">
           <CardContent className="px-4 py-3">
-            <p className="text-xs text-slate-500">🇺🇸 US</p>
-            <p className="text-xl font-mono text-slate-100">${fmtNum(summary.us_value / 83, 0)}</p>
-            <p className="text-xs text-slate-500">{fmtNum(summary.us_pct, 1)}%</p>
+            <p className="text-xs text-muted-foreground">🇺🇸 US</p>
+            <p className="text-xl font-mono text-foreground">${fmtNum(summary.us_value / 83, 0)}</p>
+            <p className="text-xs text-muted-foreground">{fmtNum(summary.us_pct, 1)}%</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Benchmarks */}
       {summary.benchmarks.length > 0 && (
-        <div className="flex items-center gap-4 flex-wrap">
-          <span className="text-xs text-slate-600">vs benchmarks:</span>
+        <div className="flex items-center gap-4 flex-wrap animate-fade-in-up stagger-5">
+          <span className="text-xs text-muted-foreground">vs benchmarks:</span>
           {summary.benchmarks.map((b) => (
-            <span key={b.name} className="text-xs text-slate-400">
+            <span key={b.name} className="text-xs text-muted-foreground">
               {b.name}{" "}
-              <span className={b.return_pct != null && b.return_pct >= 0 ? "text-green-400" : "text-red-400"}>
+              <span className={b.return_pct != null && b.return_pct >= 0 ? "text-positive" : "text-negative"}>
                 {b.return_pct != null ? fmtPct(b.return_pct) : "—"}
               </span>
             </span>
@@ -179,13 +195,13 @@ export default function PortfolioPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Sector pie */}
-        <Card className="bg-slate-900 border-slate-800">
+        <Card className="bg-card border-border animate-fade-in-up stagger-6">
           <CardHeader className="px-4 pt-4 pb-2">
-            <CardTitle className="text-xs text-slate-500 font-normal">Sector Allocation</CardTitle>
+            <CardTitle className="text-xs text-muted-foreground font-normal">Sector Allocation</CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-4">
             {(summary.sector_allocations ?? []).length === 0 ? (
-              <p className="text-slate-600 text-sm">No data.</p>
+              <p className="text-muted-foreground text-sm">No data.</p>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
                 <PieChart>
@@ -203,18 +219,23 @@ export default function PortfolioPage() {
                     ))}
                   </Pie>
                   <Tooltip
-                    contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 6 }}
+                    contentStyle={{
+                      background: "var(--card)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      color: "var(--foreground)",
+                    }}
                     formatter={(v) => [`${Number(v).toFixed(1)}%`, "Allocation"]}
                   />
                   <Legend
                     iconSize={8}
-                    formatter={(v) => <span className="text-xs text-slate-400">{v}</span>}
+                    formatter={(v) => <span className="text-xs text-muted-foreground">{v}</span>}
                   />
                 </PieChart>
               </ResponsiveContainer>
             )}
             {(summary.sector_allocations ?? []).some((s) => s.pct > 25) && (
-              <div className="flex items-center gap-1.5 mt-2 text-yellow-400 text-xs">
+              <div className="flex items-center gap-1.5 mt-2 text-warning text-xs">
                 <AlertTriangle className="h-3 w-3" />
                 Sector concentration &gt; 25%
               </div>
@@ -223,69 +244,71 @@ export default function PortfolioPage() {
         </Card>
 
         {/* Holdings table */}
-        <div className="lg:col-span-2">
-          <Card className="bg-slate-900 border-slate-800">
+        <div className="lg:col-span-2 animate-fade-in-up stagger-7">
+          <Card className="bg-card border-border overflow-hidden">
             <CardContent className="p-0">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-600">
-                    <th className="text-left px-4 py-2.5 font-normal">Ticker</th>
-                    <th className="text-right px-4 py-2.5 font-normal">Qty</th>
-                    <th className="text-right px-4 py-2.5 font-normal">Avg</th>
-                    <th className="text-right px-4 py-2.5 font-normal">LTP</th>
-                    <th className="text-right px-4 py-2.5 font-normal">P&L%</th>
-                    <th className="text-right px-4 py-2.5 font-normal">Days</th>
-                    <th className="text-center px-4 py-2.5 font-normal">Tax</th>
-                    <th className="px-4 py-2.5" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {holdings.map((h) => (
-                    <tr key={h.id} className="border-b border-slate-800/40 last:border-0 hover:bg-slate-800/30">
-                      <td className="px-4 py-2.5">
-                        <a href={`/stocks/${h.ticker}`} className="text-indigo-400 hover:text-indigo-300 font-mono font-medium">
-                          {h.ticker}
-                        </a>
-                        <span className="ml-1 text-slate-600">{countryFlag(h.country)}</span>
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-300">{h.qty}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-400">{fmtNum(h.avg_price, 2)}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-slate-300">
-                        {h.current_price != null ? fmtNum(h.current_price, 2) : "—"}
-                      </td>
-                      <td className={`px-4 py-2.5 text-right font-mono ${h.unrealized_pnl_pct != null && h.unrealized_pnl_pct >= 0 ? "text-green-400" : "text-red-400"}`}>
-                        {h.unrealized_pnl_pct != null ? fmtPct(h.unrealized_pnl_pct, 1) : "—"}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-slate-500">{h.days_held}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        {h.ltcg_status && (
-                          <span className={`text-xs font-medium ${h.ltcg_status === "LTCG" ? "text-green-500" : h.ltcg_status === "STCG" ? "text-yellow-500" : "text-orange-400"}`}>
-                            {h.ltcg_status}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => openEditDialog(h.id)}
-                            className="text-slate-700 hover:text-slate-300 transition-colors"
-                            title="Edit holding"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(h.id)}
-                            className="text-slate-700 hover:text-red-400 transition-colors"
-                            title="Delete holding"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-muted-foreground">
+                      <th className="text-left px-4 py-2.5 font-normal">Ticker</th>
+                      <th className="text-right px-4 py-2.5 font-normal">Qty</th>
+                      <th className="text-right px-4 py-2.5 font-normal">Avg</th>
+                      <th className="text-right px-4 py-2.5 font-normal">LTP</th>
+                      <th className="text-right px-4 py-2.5 font-normal">P&L%</th>
+                      <th className="text-right px-4 py-2.5 font-normal">Days</th>
+                      <th className="text-center px-4 py-2.5 font-normal">Tax</th>
+                      <th className="px-4 py-2.5" />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {holdings.map((h) => (
+                      <tr key={h.id} className="border-b border-border/40 last:border-0 hover:bg-accent/50 transition-colors duration-150">
+                        <td className="px-4 py-2.5">
+                          <a href={`/stocks/${h.ticker}`} className="text-primary hover:text-primary/80 font-mono font-medium transition-colors cursor-pointer">
+                            {h.ticker}
+                          </a>
+                          <span className="ml-1 text-muted-foreground">{countryFlag(h.country)}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-foreground/80">{h.qty}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-muted-foreground">{fmtNum(h.avg_price, 2)}</td>
+                        <td className="px-4 py-2.5 text-right font-mono text-foreground/80">
+                          {h.current_price != null ? fmtNum(h.current_price, 2) : "—"}
+                        </td>
+                        <td className={`px-4 py-2.5 text-right font-mono ${h.unrealized_pnl_pct != null && h.unrealized_pnl_pct >= 0 ? "text-positive" : "text-negative"}`}>
+                          {h.unrealized_pnl_pct != null ? fmtPct(h.unrealized_pnl_pct, 1) : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-muted-foreground">{h.days_held}</td>
+                        <td className="px-4 py-2.5 text-center">
+                          {h.ltcg_status && (
+                            <span className={`text-xs font-medium ${h.ltcg_status === "LTCG" ? "text-positive" : h.ltcg_status === "STCG" ? "text-warning" : "text-orange-400"}`}>
+                              {h.ltcg_status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => openEditDialog(h.id)}
+                              className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                              title="Edit holding"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(h.id)}
+                              className="text-muted-foreground hover:text-negative transition-colors cursor-pointer"
+                              title="Delete holding"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -299,7 +322,7 @@ export default function PortfolioPage() {
           if (!open) resetForm();
         }}
       >
-        <DialogContent className="bg-slate-900 border-slate-700 text-slate-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader>
             <DialogTitle>{editingId != null ? "Edit Holding" : "Add Holding"}</DialogTitle>
           </DialogHeader>
@@ -313,24 +336,24 @@ export default function PortfolioPage() {
               ] as const
             ).map(({ label, key, type, placeholder }) => (
               <div key={key}>
-                <label className="text-xs text-slate-500 block mb-1">{label}</label>
+                <label className="text-xs text-muted-foreground block mb-1">{label}</label>
                 <input
                   type={type}
                   value={form[key]}
                   onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
                   placeholder={placeholder}
                   disabled={editingId != null && key === "ticker"}
-                  className="w-full h-8 rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3"
+                  className="w-full h-8 rounded-md bg-muted border border-border text-foreground text-sm px-3 focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                 />
               </div>
             ))}
             <div>
-              <label className="text-xs text-slate-500 block mb-1">Market</label>
+              <label className="text-xs text-muted-foreground block mb-1">Market</label>
               <select
                 value={form.country}
                 onChange={(e) => setForm((p) => ({ ...p, country: e.target.value as Country }))}
                 disabled={editingId != null}
-                className="w-full h-8 rounded-md bg-slate-800 border border-slate-700 text-slate-100 text-sm px-3"
+                className="w-full h-8 rounded-md bg-muted border border-border text-foreground text-sm px-3 focus:outline-none focus:ring-1 focus:ring-primary transition-shadow cursor-pointer"
               >
                 <option value="IN">🇮🇳 India (NSE/BSE)</option>
                 <option value="US">🇺🇸 US</option>
@@ -338,12 +361,12 @@ export default function PortfolioPage() {
             </div>
           </div>
           <div className="flex justify-end gap-2 mt-2">
-            <Button variant="ghost" size="sm" className="text-slate-400" onClick={() => setEditorOpen(false)}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground cursor-pointer" onClick={() => setEditorOpen(false)}>
               Cancel
             </Button>
             <Button
               size="sm"
-              className="bg-indigo-600 hover:bg-indigo-500"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 btn-scale cursor-pointer"
               onClick={handleSave}
               disabled={!form.ticker || !form.qty || !form.avg_price}
             >
@@ -355,8 +378,8 @@ export default function PortfolioPage() {
 
       {/* LTCG warning */}
       {holdings.some((h) => h.ltcg_status === "LTCG_WARN") && (
-        <Card className="bg-yellow-900/20 border-yellow-800/40">
-          <CardContent className="px-4 py-3 flex items-center gap-2 text-yellow-400 text-xs">
+        <Card className="bg-warning/10 border-warning/30 animate-fade-in-up">
+          <CardContent className="px-4 py-3 flex items-center gap-2 text-warning text-xs">
             <AlertTriangle className="h-4 w-4 shrink-0" />
             Some holdings are approaching 12 months — selling now would attract STCG instead of LTCG.
           </CardContent>

@@ -4,11 +4,12 @@ from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import select
 
 from pipeline.db import init_db
 from pipeline.db.base import _session_factory, get_engine, get_session
-from pipeline.db.enums import Country
+from pipeline.db.enums import Country, IndexName
 from pipeline.db.models import RebalanceSnapshot, Score, Stock
 from pipeline.providers.dto import FundamentalSnapshot, MacroReading, PriceBar
 from pipeline.scheduler import (
@@ -94,12 +95,12 @@ def test_run_pipeline_persists_snapshot(tmp_path, monkeypatch):
     with get_session() as session:
         session.add(
             Stock(
-                ticker="AAPL",
-                country=Country.US,
-                name="Apple Inc.",
+                ticker="INFY",
+                country=Country.INDIA,
+                name="Infosys Ltd.",
                 sector="Technology",
-                industry="Consumer Electronics",
-                currency="USD",
+                industry="IT Services",
+                currency="INR",
                 market_cap=3_000_000_000_000,
                 listing_date=date(2000, 1, 1),
             )
@@ -114,6 +115,14 @@ def test_run_pipeline_persists_snapshot(tmp_path, monkeypatch):
         ),
         events=SimpleNamespace(get_upcoming_events=lambda ticker, country, within_days=120: []),
         news=SimpleNamespace(get_general_news=lambda since, limit=100: []),
+        india=SimpleNamespace(
+            _india=None,
+            get_bulk_deals=lambda ticker, country, limit=50: [],
+            get_insider_trades=lambda ticker, country, limit=50: [],
+            get_market_depth=lambda ticker, country: None,
+            get_derivatives_sentiment=lambda ticker, country: None,
+            get_market_breadth=lambda: None,
+        ),
         macro=SimpleNamespace(
             get_series=lambda indicator, start, end: {
                 "US_VIX": _series("US_VIX", start, 30, 18.0),
@@ -133,13 +142,22 @@ def test_run_pipeline_persists_snapshot(tmp_path, monkeypatch):
 
     with (
         patch("pipeline.scheduler.get_data_provider", return_value=fake_provider),
-        patch("pipeline.scheduler.UniverseLoader.refresh"),
-        patch("pipeline.scheduler.UniverseLoader.get_active_tickers", return_value=[("AAPL", Country.US)]),
+        patch("pipeline.scheduler.UniverseLoader.refresh") as refresh_mock,
+        patch(
+            "pipeline.scheduler.UniverseLoader.get_active_tickers",
+            return_value=[("INFY", Country.INDIA)],
+        ) as active_tickers_mock,
         patch("pipeline.scheduler.fetch_nse_official_batch"),
         patch("pipeline.scheduler.TelegramNotifier.send_monthly_digest", return_value=False),
         patch("pipeline.scheduler.TelegramNotifier.send_text", return_value=False),
     ):
         run_pipeline(as_of=date(2026, 4, 7), fresh_capital=1000, picks_per_bucket=10)
+
+    refresh_mock.assert_called_once_with(indexes=[IndexName.NIFTY_500])
+    active_tickers_mock.assert_called_once_with(
+        country=Country.INDIA,
+        index=IndexName.NIFTY_500,
+    )
 
     with get_session() as session:
         snapshot = session.execute(select(RebalanceSnapshot)).scalar_one()
@@ -151,6 +169,7 @@ def test_run_pipeline_persists_snapshot(tmp_path, monkeypatch):
     assert len(scores) > 0
 
 
+@pytest.mark.india
 def test_select_official_india_batch_candidates_prioritizes_seed_names(tmp_path) -> None:
     data_dir = tmp_path / "official_india"
     (data_dir / "nse" / "financials").mkdir(parents=True, exist_ok=True)
@@ -177,6 +196,7 @@ def test_select_official_india_batch_candidates_prioritizes_seed_names(tmp_path)
     assert candidates == ["TCS", "INFY", "ITC"]
 
 
+@pytest.mark.india
 def test_needs_official_india_fetch_requires_both_kinds(tmp_path) -> None:
     data_dir = tmp_path / "official_india"
     (data_dir / "nse" / "financials").mkdir(parents=True, exist_ok=True)

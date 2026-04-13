@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -266,7 +266,7 @@ def _write_payload(
         "ticker": ticker,
         "source": source,
         kind: rows,
-        "imported_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "imported_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "source_file": source_file,
         "source_reference": source_reference,
     }
@@ -306,7 +306,7 @@ def _filter_rows_for_ticker(rows: list[dict[str, Any]], ticker: str) -> list[dic
     present_keys = {
         _normalize_key(key)
         for row in rows
-        for key in row.keys()
+        for key in row
     }
     candidate_keys = [key for key in _TICKER_KEYS if key in present_keys]
     if not candidate_keys:
@@ -315,7 +315,7 @@ def _filter_rows_for_ticker(rows: list[dict[str, Any]], ticker: str) -> list[dic
     filtered = [
         row
         for row in rows
-        if any(_normalize_ticker(row.get(key)) == ticker for key in row.keys() if _normalize_key(key) in candidate_keys)
+        if any(_normalize_ticker(row.get(key)) == ticker for key in row if _normalize_key(key) in candidate_keys)
     ]
     return filtered or rows
 
@@ -535,7 +535,11 @@ def _to_num(value: Any) -> float | None:
 
 
 class NSEOfficialClient:
-    """Small live client for the NSE corporate filings APIs."""
+    """Resilient live client for NSE corporate filings, market data, and derivatives APIs.
+
+    Uses the hardened IndiaHTTPClient underneath for cookie management,
+    rate limiting, retry, and raw payload preservation.
+    """
 
     def __init__(
         self,
@@ -543,24 +547,24 @@ class NSEOfficialClient:
         *,
         base_url: str = _NSE_BASE_URL,
         timeout: float = 30.0,
+        preserve_raw: bool = False,
     ) -> None:
+        from pipeline.providers.india_http import IndiaHTTPClient  # avoid circular at module level
+
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.session = session or requests.Session()
-        self.session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                ),
-                "Accept": "application/json, text/plain, */*",
-                "Referer": f"{self.base_url}/companies-listing/corporate-filings-financial-results",
-            }
+        self._http = IndiaHTTPClient(
+            session=session,
+            timeout=timeout,
+            preserve_raw=preserve_raw,
         )
-        self._primed = False
+
+    # ------------------------------------------------------------------
+    # Fundamentals and shareholding (existing, now via hardened client)
+    # ------------------------------------------------------------------
 
     def get_equity_meta(self, symbol: str) -> dict[str, Any]:
-        payload = self._get_json("/api/equity-meta-info", params={"symbol": symbol})
+        payload = self._nse("/api/equity-meta-info", params={"symbol": symbol})
         if not isinstance(payload, dict) or not payload.get("symbol"):
             raise RuntimeError(f"NSE did not return equity metadata for '{symbol}'.")
         return payload
@@ -571,7 +575,7 @@ class NSEOfficialClient:
         *,
         period: str = "Quarterly",
     ) -> list[dict[str, Any]]:
-        payload = self._get_json(
+        payload = self._nse(
             "/api/corporates-financial-results",
             params={"index": "equities", "symbol": symbol, "period": period},
         )
@@ -589,7 +593,7 @@ class NSEOfficialClient:
             "ind": master_row.get("reInd"),
             "format": master_row.get("format"),
         }
-        payload = self._get_json("/api/corporates-financial-results-data", params=params)
+        payload = self._nse("/api/corporates-financial-results-data", params=params)
         if not isinstance(payload, dict):
             raise RuntimeError(
                 f"NSE filing detail response was not an object for seq '{master_row.get('seqNumber')}'."
@@ -597,7 +601,7 @@ class NSEOfficialClient:
         return payload
 
     def get_shareholding_master(self, symbol: str) -> list[dict[str, Any]]:
-        payload = self._get_json(
+        payload = self._nse(
             "/api/corporate-share-holdings-master",
             params={"index": "equities", "symbol": symbol},
         )
@@ -605,26 +609,328 @@ class NSEOfficialClient:
             raise RuntimeError(f"NSE shareholding response was not a list for '{symbol}'.")
         return [row for row in payload if isinstance(row, dict)]
 
-    def _prime(self) -> None:
-        if self._primed:
-            return
-        response = self.session.get(
-            f"{self.base_url}/companies-listing/corporate-filings-financial-results",
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        self._primed = True
+    # ------------------------------------------------------------------
+    # Quote and market data
+    # ------------------------------------------------------------------
 
-    def _get_json(
-        self,
-        path: str,
-        *,
-        params: dict[str, Any] | None = None,
-    ) -> Any:
-        self._prime()
-        response = self.session.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
-        response.raise_for_status()
+    def get_quote_equity(self, symbol: str) -> dict[str, Any]:
+        payload = self._nse("/api/quote-equity", params={"symbol": symbol})
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"NSE quote-equity response was not an object for '{symbol}'.")
+        return payload
+
+    def get_quote_derivative(self, symbol: str) -> dict[str, Any]:
+        """F&O quote for a symbol (futures + options top-line)."""
+        payload = self._nse("/api/quote-derivative", params={"symbol": symbol})
+        return payload if isinstance(payload, dict) else {}
+
+    # ------------------------------------------------------------------
+    # Market depth / order book
+    # ------------------------------------------------------------------
+
+    def get_market_depth(self, symbol: str) -> dict[str, Any]:
+        """Top-5 bid/ask depth from NSE quote endpoint.
+
+        NSE embeds depth data inside the quote-equity response under `marketDeptOrderBook`.
+        Returns empty dict if the endpoint does not expose depth for this symbol.
+        """
         try:
-            return response.json()
-        except ValueError as exc:
-            raise RuntimeError(f"NSE returned a non-JSON payload for '{path}'.") from exc
+            quote = self.get_quote_equity(symbol)
+        except Exception:  # noqa: BLE001
+            return {}
+        depth = quote.get("marketDeptOrderBook")
+        if isinstance(depth, dict):
+            return depth
+        # Some NSE responses nest it differently
+        price_info = quote.get("priceInfo") or {}
+        return price_info.get("marketDeptOrderBook") or {}
+
+    # ------------------------------------------------------------------
+    # Corporate events
+    # ------------------------------------------------------------------
+
+    def get_corporate_announcements(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        payload = self._nse(
+            "/api/corporate-announcements",
+            params=self._equity_params(symbol),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("NSE corporate announcements response was not a list.")
+        return [row for row in payload if isinstance(row, dict)]
+
+    def get_board_meetings(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        payload = self._nse(
+            "/api/corporate-board-meetings",
+            params=self._equity_params(symbol),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("NSE board meetings response was not a list.")
+        return [row for row in payload if isinstance(row, dict)]
+
+    def get_corporate_actions(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        payload = self._nse(
+            "/api/corporate-actions",
+            params=self._equity_params(symbol),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("NSE corporate actions response was not a list.")
+        return [row for row in payload if isinstance(row, dict)]
+
+    # ------------------------------------------------------------------
+    # Bulk and block deals
+    # ------------------------------------------------------------------
+
+    def get_bulk_deals(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        """Bulk deal disclosures. Returns all recent bulk deals; filter by symbol if given."""
+        payload = self._nse("/api/bulk-deals", params=self._equity_params(symbol))
+        rows = _unwrap_list(payload)
+        if symbol:
+            sym_upper = symbol.upper()
+            rows = [r for r in rows if str(r.get("symbol") or r.get("Symbol") or "").upper() == sym_upper]
+        return rows
+
+    def get_block_deals(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        """Block deal disclosures."""
+        payload = self._nse("/api/block-deals", params=self._equity_params(symbol))
+        rows = _unwrap_list(payload)
+        if symbol:
+            sym_upper = symbol.upper()
+            rows = [r for r in rows if str(r.get("symbol") or r.get("Symbol") or "").upper() == sym_upper]
+        return rows
+
+    # ------------------------------------------------------------------
+    # Insider trading
+    # ------------------------------------------------------------------
+
+    def get_insider_trades(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        """SEBI insider trading disclosures (SAST/PIT regulations)."""
+        params: dict[str, Any] = {}
+        if symbol:
+            params["symbol"] = symbol
+        payload = self._nse("/api/corporate-insider-trading", params=params or None)
+        return _unwrap_list(payload)
+
+    # ------------------------------------------------------------------
+    # Derivatives (F&O)
+    # ------------------------------------------------------------------
+
+    def get_option_chain(self, symbol: str) -> dict[str, Any]:
+        """Full NSE option chain for a symbol (indices and stocks in F&O)."""
+        payload = self._nse("/api/option-chain-equities", params={"symbol": symbol})
+        return payload if isinstance(payload, dict) else {}
+
+    def get_option_chain_index(self, index_symbol: str = "NIFTY") -> dict[str, Any]:
+        """Full NSE option chain for an index (NIFTY, BANKNIFTY, etc.)."""
+        payload = self._nse("/api/option-chain-indices", params={"symbol": index_symbol})
+        return payload if isinstance(payload, dict) else {}
+
+    # ------------------------------------------------------------------
+    # Index and market-wide data
+    # ------------------------------------------------------------------
+
+    def get_india_vix(self) -> dict[str, Any]:
+        """India VIX spot value and change."""
+        payload = self._nse("/api/allIndices")
+        if isinstance(payload, dict):
+            indices = payload.get("data") or []
+            for item in indices:
+                if isinstance(item, dict) and "INDIA VIX" in str(item.get("index") or item.get("indexSymbol") or ""):
+                    return item
+        return {}
+
+    def get_all_indices(self) -> list[dict[str, Any]]:
+        """All NSE indices with latest quote data (NIFTY 50, BANKNIFTY, sector indices)."""
+        payload = self._nse("/api/allIndices")
+        if isinstance(payload, dict):
+            return [row for row in (payload.get("data") or []) if isinstance(row, dict)]
+        return []
+
+    def get_advance_decline(self) -> dict[str, Any]:
+        """Market breadth: advance/decline ratio across NSE."""
+        payload = self._nse("/api/advance-decline")
+        return payload if isinstance(payload, dict) else {}
+
+    def get_fno_ban_list(self) -> dict[str, Any]:
+        """Stocks currently in the F&O ban period (NSE F-ban list)."""
+        payload = self._nse("/api/fo-ban-lot-size")
+        return payload if isinstance(payload, dict) else {}
+
+    def get_asm_list(self) -> dict[str, Any]:
+        """Stocks on the ASM (Additional Surveillance Measure) list."""
+        payload = self._nse("/api/reportASM")
+        return payload if isinstance(payload, dict) else {}
+
+    # ------------------------------------------------------------------
+    # Historical price data (bhavcopy-style)
+    # ------------------------------------------------------------------
+
+    def get_historical_price_series(
+        self,
+        symbol: str,
+        *,
+        series: str = "EQ",
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Historical daily OHLCV series from NSE with delivery percentage.
+
+        from_date / to_date format: DD-MM-YYYY
+        """
+        params: dict[str, Any] = {"symbol": symbol, "series": series}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+        payload = self._nse("/api/historical/cm/equity", params=params)
+        if isinstance(payload, dict):
+            return _unwrap_list(payload.get("data") or payload)
+        return _unwrap_list(payload)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _nse(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._http.nse_get_json(path, params=params)
+
+    @staticmethod
+    def _equity_params(symbol: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"index": "equities"}
+        if symbol:
+            params["symbol"] = symbol
+        return params
+
+
+class BSEOfficialClient:
+    """Resilient live client for BSE public APIs.
+
+    BSE is used as the NSE fallback lane for quotes, corporate events,
+    bulk/block deals, and insider disclosures.
+
+    BSE endpoints commonly key by `scripcode` (e.g. 500325 for Reliance).
+    The caller is responsible for providing the correct scripcode from the
+    stock master identifiers (bse_scripcode).
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 30.0,
+        preserve_raw: bool = False,
+    ) -> None:
+        from pipeline.providers.india_http import IndiaHTTPClient
+
+        self._http = IndiaHTTPClient(timeout=timeout, preserve_raw=preserve_raw)
+
+    # ------------------------------------------------------------------
+    # Quote and price data
+    # ------------------------------------------------------------------
+
+    def get_price_graph(self, scripcode: str) -> dict[str, Any]:
+        """Latest + recent historical price data for a BSE scripcode."""
+        payload = self._bse(
+            "/BseIndiaAPI/api/StockReachGraph/w",
+            params={"scripcode": scripcode},
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    def get_stock_quote(self, scripcode: str) -> dict[str, Any]:
+        """Latest quote for a BSE scripcode."""
+        payload = self._bse(
+            "/BseIndiaAPI/api/getScripHeaderData/w",
+            params={"Scripcode": scripcode},
+        )
+        return payload if isinstance(payload, dict) else {}
+
+    # ------------------------------------------------------------------
+    # Corporate events
+    # ------------------------------------------------------------------
+
+    def get_corporate_announcements(
+        self,
+        scripcode: str | None = None,
+        *,
+        category: str = "Company Update",
+        page: int = 1,
+    ) -> list[dict[str, Any]]:
+        """BSE corporate announcements. If scripcode given, filter to that stock."""
+        params: dict[str, Any] = {
+            "pageno": page,
+            "strCat": category,
+        }
+        if scripcode:
+            params["scripcode"] = scripcode
+        payload = self._bse(
+            "/BseIndiaAPI/api/AnnSubCategoryGetData/w",
+            params=params,
+        )
+        return _unwrap_list(payload)
+
+    def get_corporate_actions(self, scripcode: str) -> list[dict[str, Any]]:
+        """BSE corporate actions (dividends, bonus, splits, rights) for a scripcode."""
+        payload = self._bse(
+            "/BseIndiaAPI/api/CorporateAction/w",
+            params={"scripcode": scripcode},
+        )
+        return _unwrap_list(payload)
+
+    def get_board_meetings(self, scripcode: str) -> list[dict[str, Any]]:
+        """BSE board meeting schedule for a scripcode."""
+        payload = self._bse(
+            "/BseIndiaAPI/api/BoardMeeting/w",
+            params={"scripcode": scripcode},
+        )
+        return _unwrap_list(payload)
+
+    # ------------------------------------------------------------------
+    # Bulk and block deals
+    # ------------------------------------------------------------------
+
+    def get_bulk_deals(self, scripcode: str | None = None) -> list[dict[str, Any]]:
+        """BSE bulk deal disclosures."""
+        params: dict[str, Any] = {}
+        if scripcode:
+            params["scripcode"] = scripcode
+        payload = self._bse("/BseIndiaAPI/api/BulkDealData/w", params=params or None)
+        return _unwrap_list(payload)
+
+    def get_block_deals(self, scripcode: str | None = None) -> list[dict[str, Any]]:
+        """BSE block deal disclosures."""
+        params: dict[str, Any] = {}
+        if scripcode:
+            params["scripcode"] = scripcode
+        payload = self._bse("/BseIndiaAPI/api/BlockDealData/w", params=params or None)
+        return _unwrap_list(payload)
+
+    # ------------------------------------------------------------------
+    # Insider trading
+    # ------------------------------------------------------------------
+
+    def get_insider_trades(self, scripcode: str | None = None) -> list[dict[str, Any]]:
+        """BSE insider trading disclosures (SAST/PIT)."""
+        params: dict[str, Any] = {}
+        if scripcode:
+            params["scripcode"] = scripcode
+        payload = self._bse("/BseIndiaAPI/api/InsiderTradingData/w", params=params or None)
+        return _unwrap_list(payload)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _bse(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._http.bse_get_json(path, params=params)
+
+
+def _unwrap_list(payload: Any) -> list[dict[str, Any]]:
+    """Extract a list of dicts from a response payload that may be wrapped."""
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "Data", "rows", "items", "deals", "records", "Table", "Table1"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+    return []

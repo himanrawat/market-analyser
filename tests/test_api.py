@@ -89,15 +89,21 @@ def db():
 
 @pytest.fixture(autouse=True)
 def stub_stock_detail_provider():
-    with patch("api.routers.stocks.FMPProvider") as mock_cls:
-        provider = mock_cls.return_value
-        provider.get_analyst_forecast.return_value = None
-        provider.get_stock_peers.return_value = []
-        provider.get_upcoming_events.return_value = []
-        provider.get_stock_news.return_value = []
-        provider.get_profile.return_value = None
-        provider.get_quarterly_fundamentals.return_value = []
-        yield provider
+    with (
+        patch("api.routers.stocks.USMarketProvider") as mock_us_cls,
+        patch("api.routers.stocks.get_data_provider") as mock_get_dp,
+    ):
+        us_provider = mock_us_cls.return_value
+        us_provider.get_analyst_forecast.return_value = None
+        us_provider.get_stock_peers.return_value = []
+        us_provider.get_profile.return_value = None
+        us_provider.get_quarterly_fundamentals.return_value = []
+
+        data_provider = mock_get_dp.return_value
+        data_provider.news.get_stock_news.return_value = []
+        data_provider.events.get_upcoming_events.return_value = []
+
+        yield {"us": us_provider, "data_provider": data_provider}
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +207,7 @@ class TestDashboard:
 # Kite
 # ---------------------------------------------------------------------------
 
+@pytest.mark.india
 class TestKite:
     def test_status_reads_api_key_from_settings(self, client, monkeypatch):
         monkeypatch.setattr(kite_router.settings, "kite_api_key", "kite-test-key")
@@ -276,6 +283,7 @@ class TestKite:
 # Ranked lists
 # ---------------------------------------------------------------------------
 
+@pytest.mark.us
 class TestRanked:
     def test_no_snapshot_returns_empty(self, client):
         r = client.get("/api/ranked")
@@ -312,6 +320,7 @@ class TestRanked:
 # Actions
 # ---------------------------------------------------------------------------
 
+@pytest.mark.us
 class TestActions:
     def test_no_snapshot_404(self, client):
         r = client.get("/api/actions")
@@ -346,7 +355,7 @@ class TestActions:
         snap = _seed_snapshot(db)
         _seed_score(db, snap, stock)
         with patch("pipeline.providers.registry.get_data_provider") as mock_prov:
-            mock_prov.return_value.prices.return_value = None
+            mock_prov.return_value.prices.get_latest_quote.side_effect = Exception("no quote")
             r = client.get("/api/actions/refresh-prices")
         assert r.status_code == 200
         assert "updated" in r.json()
@@ -359,7 +368,7 @@ class TestActions:
         assert r.status_code == 200
         data = r.json()
         assert data["buys"][0]["suggested_amount"] is not None
-        assert "NVDA|quality_momentum" in data["plan"]["action_amounts"]
+        assert "NVDA|US|quality_momentum" in data["plan"]["action_amounts"]
 
     def test_execute_buy_creates_holding_and_journal(self, client, db):
         stock = _seed_stock(db, ticker="AMD")
@@ -448,6 +457,7 @@ class TestActions:
 # Stocks
 # ---------------------------------------------------------------------------
 
+@pytest.mark.us
 class TestStocks:
     def test_unknown_ticker_404(self, client):
         r = client.get("/api/stocks/UNKNOWN")
@@ -482,6 +492,7 @@ class TestPortfolio:
         assert r.status_code == 200
         assert r.json()["holdings"] == []
 
+    @pytest.mark.india
     def test_add_holding(self, client, db):
         _seed_stock(db, ticker="INFY", country=Country.INDIA)
         r = client.post("/api/portfolio/holdings", json={
@@ -493,6 +504,7 @@ class TestPortfolio:
         assert r.status_code == 201
         assert r.json()["ticker"] == "INFY"
 
+    @pytest.mark.us
     def test_add_holding_auto_creates_stock(self, client):
         r = client.post("/api/portfolio/holdings", json={
             "ticker": "NEWCO",
@@ -502,6 +514,7 @@ class TestPortfolio:
         })
         assert r.status_code == 201
 
+    @pytest.mark.india
     def test_update_holding(self, client, db):
         stock = _seed_stock(db, ticker="TCS", country=Country.INDIA)
         holding = Holding(
@@ -514,6 +527,7 @@ class TestPortfolio:
         assert r.status_code == 200
         assert r.json()["qty"] == 10.0
 
+    @pytest.mark.india
     def test_delete_holding(self, client, db):
         stock = _seed_stock(db, ticker="WIPRO", country=Country.INDIA)
         holding = Holding(
@@ -525,6 +539,7 @@ class TestPortfolio:
         r = client.delete(f"/api/portfolio/holdings/{holding.id}")
         assert r.status_code == 204
 
+    @pytest.mark.india
     def test_summary_returns_totals(self, client, db):
         stock = _seed_stock(db, ticker="RELIANCE", country=Country.INDIA)
         db.add(Holding(
@@ -537,6 +552,7 @@ class TestPortfolio:
         data = r.json()
         assert data["total_cost"] == 10000.0
 
+    @pytest.mark.us
     def test_summary_includes_sector_allocation(self, client, db):
         stock = _seed_stock(db, ticker="MSFT", sector="Technology")
         db.add(

@@ -5,6 +5,7 @@
 **Version:** 1.2 (v1 scope locked, with hybrid India data-lane update)
 **Last updated:** April 12, 2026
 **Status:** Approved for build
+**Execution priority:** Complete the Indian market lane first. US market enhancement work is on hold until the India implementation is complete.
 
 ### Changelog
 - **v1.2** — Changed India fundamentals architecture to a hybrid lane: official NSE filings first, BSE fallback, vendor fallback only as a last resort. Added self-computed India ratios/valuation as a core design requirement. Removed the assumption that FMP Starter is the production source of truth for Indian quarterly fundamentals.

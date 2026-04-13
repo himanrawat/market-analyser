@@ -8,8 +8,7 @@ GET  /api/actions/refresh-prices     — pull 15-min delayed quotes for action l
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timezone
-from typing import Optional
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
@@ -37,7 +36,7 @@ from pipeline.db.models import (
     TradeJournalEntry,
 )
 from pipeline.portfolio.diff import UNDERWEIGHT_THRESHOLD, _format_reason
-from pipeline.portfolio.planner import CapitalPlanner, DEFAULT_BUCKET_ALLOCATION
+from pipeline.portfolio.planner import DEFAULT_BUCKET_ALLOCATION, CapitalPlanner
 from pipeline.scoring.base import ScoreOutput
 from pipeline.scoring.guardrails import HYSTERESIS_BUFFER
 
@@ -242,7 +241,7 @@ def refresh_prices(db: Session = Depends(get_db)) -> RefreshPricesResponse:
     ).scalar_one_or_none()
 
     if snapshot is None:
-        return RefreshPricesResponse(updated={}, as_of=datetime.now(tz=timezone.utc).isoformat())
+        return RefreshPricesResponse(updated={}, as_of=datetime.now(tz=UTC).isoformat())
 
     # Get tickers in current action list (top ranked + held)
     score_rows = db.execute(
@@ -251,22 +250,21 @@ def refresh_prices(db: Session = Depends(get_db)) -> RefreshPricesResponse:
         .where(Score.snapshot_id == snapshot.id, Score.rank.is_not(None))
     ).scalars().all()
 
-    tickers = list({s.stock.ticker for s in score_rows})
+    tickers = list({(s.stock.ticker, Country(s.stock.country)) for s in score_rows})
     provider = get_data_provider()
     updated: dict[str, float] = {}
 
-    for ticker in tickers[:30]:   # cap at 30 (free tier safe)
+    for ticker, country in tickers[:30]:   # cap at 30 (free tier safe)
         try:
-            quote = provider.prices(ticker)
-            if quote and not quote.empty:
-                updated[ticker] = float(quote["close"].iloc[-1])
+            quote = provider.prices.get_latest_quote(ticker, country)
+            updated[ticker] = float(quote.close)
         except Exception:  # noqa: BLE001
             pass
 
     logger.info(f"refresh-prices → updated {len(updated)}/{len(tickers)} tickers")
     return RefreshPricesResponse(
         updated=updated,
-        as_of=datetime.now(tz=timezone.utc).isoformat(),
+        as_of=datetime.now(tz=UTC).isoformat(),
     )
 
 
@@ -300,22 +298,29 @@ def _build_action_rows(
             key=lambda score_row: score_row.rank or 0,
         )
         cutoff = ranked[-1].score if ranked else 0.0
-        top_tickers = {score_row.stock.ticker for score_row in ranked}
-        score_by_ticker = {score_row.stock.ticker: score_row for score_row in group_scores}
+        top_keys = {
+            (score_row.stock.ticker, Country(score_row.stock.country))
+            for score_row in ranked
+        }
+        score_by_key = {
+            (score_row.stock.ticker, Country(score_row.stock.country)): score_row
+            for score_row in group_scores
+        }
         country_holdings = {
-            ticker: holding for ticker, holding in holding_map.items() if holding["country"] == country
+            key: holding for key, holding in holding_map.items() if holding["country"] == country
         }
 
         for score_row in ranked:
             stock = score_row.stock
-            holding = country_holdings.get(stock.ticker)
+            stock_key = (stock.ticker, country)
+            holding = country_holdings.get(stock_key)
             current_price = price_map.get(stock.id)
             current_value = holding["current_value"] if holding else None
             action = ActionType.BUY
             reason = _score_reason(score_row, stock)
 
             if holding is not None:
-                action = ActionType.ADD if _is_underweight(holding, len(top_tickers)) else ActionType.HOLD
+                action = ActionType.ADD if _is_underweight(holding, len(top_keys)) else ActionType.HOLD
                 if action == ActionType.ADD:
                     reason = f"Underweight vs equal-weight target. {reason}"
                 else:
@@ -336,15 +341,16 @@ def _build_action_rows(
                     suggested_qty=None,
                     reason=reason,
                     factor_scores=score_row.factor_scores or {},
-                    executed=_action_key(stock.ticker, bucket) in executed_keys,
+                    executed=_action_key(stock.ticker, country, bucket) in executed_keys,
                 )
             )
 
-        for ticker, holding in country_holdings.items():
-            if ticker in top_tickers:
+        for stock_key, holding in country_holdings.items():
+            ticker, _ = stock_key
+            if stock_key in top_keys:
                 continue
 
-            stock_score = score_by_ticker.get(ticker)
+            stock_score = score_by_key.get(stock_key)
             score_value = stock_score.score if stock_score else 0.0
             drop = cutoff - score_value
             action = ActionType.SELL if drop > HYSTERESIS_BUFFER else ActionType.HOLD
@@ -370,15 +376,15 @@ def _build_action_rows(
                     suggested_qty=None,
                     reason=reason,
                     factor_scores=(stock_score.factor_scores or {}) if stock_score else {},
-                    executed=_action_key(ticker, bucket) in executed_keys,
+                    executed=_action_key(ticker, country, bucket) in executed_keys,
                 )
             )
 
     return rows
 
 
-def _action_key(ticker: str, bucket: Bucket) -> str:
-    return f"{ticker}|{bucket}"
+def _action_key(ticker: str, country: Country, bucket: Bucket) -> str:
+    return f"{ticker}|{country}|{bucket}"
 
 
 def _executed_action_keys(snapshot_id: int, db: Session) -> set[str]:
@@ -396,12 +402,12 @@ def _executed_action_keys(snapshot_id: int, db: Session) -> set[str]:
         return set()
 
     stock_ids = {stock_id for stock_id, _ in rows if stock_id is not None}
-    stocks = db.execute(select(Stock.id, Stock.ticker).where(Stock.id.in_(stock_ids))).all()
-    ticker_by_id = {stock_id: ticker for stock_id, ticker in stocks}
+    stocks = db.execute(select(Stock.id, Stock.ticker, Stock.country).where(Stock.id.in_(stock_ids))).all()
+    stock_by_id = {stock_id: (ticker, Country(country)) for stock_id, ticker, country in stocks}
     return {
-        _action_key(ticker_by_id[stock_id], Bucket(bucket))
+        _action_key(stock_by_id[stock_id][0], stock_by_id[stock_id][1], Bucket(bucket))
         for stock_id, bucket in rows
-        if stock_id in ticker_by_id and bucket is not None
+        if stock_id in stock_by_id and bucket is not None
     }
 
 
@@ -421,18 +427,22 @@ def _latest_price_map(stock_ids: set[int], db: Session) -> dict[int, float]:
     return latest
 
 
-def _holding_contexts(holdings: list[Holding], price_map: dict[int, float]) -> dict[str, dict]:
-    contexts: dict[str, dict] = {}
+def _holding_contexts(
+    holdings: list[Holding],
+    price_map: dict[int, float],
+) -> dict[tuple[str, Country], dict]:
+    contexts: dict[tuple[str, Country], dict] = {}
     portfolio_total = 0.0
 
     for holding in holdings:
+        country = Country(holding.stock.country)
         current_price = price_map.get(holding.stock_id) or holding.avg_buy_price
         current_value = holding.quantity * current_price
         portfolio_total += current_value
-        contexts[holding.stock.ticker] = {
+        contexts[(holding.stock.ticker, country)] = {
             "id": holding.id,
             "stock_id": holding.stock_id,
-            "country": Country(holding.stock.country),
+            "country": country,
             "qty": holding.quantity,
             "avg_buy_price": holding.avg_buy_price,
             "current_price": current_price,
@@ -499,8 +509,7 @@ def _load_bucket_allocation(
 
 def _apply_capital_plan(action_rows: list[ActionRow], action_amounts: dict[str, float]) -> None:
     for row in action_rows:
-        key = _action_key(row.ticker, row.bucket)
-        amount = action_amounts.get(key)
+        amount = action_amounts.get(_action_key(row.ticker, row.country, row.bucket))
         row.suggested_amount = amount
         if amount is not None and row.current_price and row.current_price > 0:
             row.suggested_qty = amount / row.current_price
@@ -550,6 +559,7 @@ def _score_reason(score_row: Score | None, stock: Stock) -> str | None:
     return _format_reason(
         ScoreOutput(
             ticker=stock.ticker,
+            country=Country(stock.country),
             bucket=Bucket(score_row.bucket),
             score=score_row.score,
             qualified=score_row.qualified,

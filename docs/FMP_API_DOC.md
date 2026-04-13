@@ -1,5 +1,10 @@
 # Free Stock Market API and Financial Statements API
 
+Reference note:
+- This file is kept as archived documentation for the US lane.
+- US market enhancement work is currently on hold while the Indian market implementation is completed.
+- This reference is not part of the active India-first implementation track.
+
 FMP is your source for the most reliable and accurate Stock Market API and Financial Data API available. Whether you're looking for real-time stock prices, financial statements, or historical data, we offer a comprehensive solution to meet all your financial data needs.
 
 Our platform provides free stock market data, including audited, standardized, and real-time updates of income statements, balance sheets, and cash flow statements on a quarterly and annual basis.

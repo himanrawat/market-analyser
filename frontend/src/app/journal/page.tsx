@@ -66,24 +66,35 @@ export default function JournalPage() {
     setError(null);
   }
 
-  if (loading) return <p className="text-slate-500 text-sm">Loading journal…</p>;
+  if (loading) {
+    return (
+      <div className="space-y-4 max-w-5xl">
+        <div className="h-6 w-36 skeleton-shimmer rounded" />
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-20 w-full skeleton-shimmer rounded" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-100 flex items-center gap-2">
-          <BookOpen className="h-5 w-5 text-indigo-400" /> Trade Journal
+      <div className="animate-fade-in-up">
+        <h1 className="text-xl font-semibold text-foreground flex items-center gap-2">
+          <BookOpen className="h-5 w-5 text-primary" /> Trade Journal
         </h1>
-        <p className="text-slate-500 text-sm mt-0.5">{entries.length} entries</p>
+        <p className="text-muted-foreground text-sm mt-0.5">{entries.length} entries</p>
       </div>
 
       <Tabs defaultValue="entries">
-        <TabsList className="bg-slate-900 border-b border-slate-800 rounded-none h-auto p-0 justify-start gap-0">
+        <TabsList className="bg-card border-b border-border rounded-none h-auto p-0 justify-start gap-0">
           {["entries", "review"].map((tab) => (
             <TabsTrigger
               key={tab}
               value={tab}
-              className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-500 data-[state=active]:bg-transparent data-[state=active]:text-indigo-300 text-slate-500 text-xs px-4 py-2.5 capitalize"
+              className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-primary text-muted-foreground text-xs px-4 py-2.5 capitalize cursor-pointer transition-colors"
             >
               {tab}
             </TabsTrigger>
@@ -92,29 +103,29 @@ export default function JournalPage() {
 
         <TabsContent value="entries" className="mt-4 space-y-2">
           {entries.length === 0 && (
-            <p className="text-slate-600 text-sm">
+            <p className="text-muted-foreground text-sm">
               No journal entries yet. Execute actions on the Actions screen to create entries.
             </p>
           )}
-          {entries.map((entry) => {
+          {entries.map((entry, i) => {
             const isExit = ["sell", "trim"].includes(normalizeAction(entry.action_type));
             return (
-              <Card key={entry.id} className="bg-slate-900 border-slate-800">
+              <Card key={entry.id} className="bg-card border-border animate-fade-in-up" style={{ animationDelay: `${i * 30}ms` }}>
                 <CardContent className="px-4 py-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-center gap-3 flex-wrap">
                       {entry.ticker ? (
                         <a
                           href={`/stocks/${entry.ticker}`}
-                          className="font-mono font-semibold text-indigo-400 hover:text-indigo-300"
+                          className="font-mono font-semibold text-primary hover:text-primary/80 transition-colors cursor-pointer"
                         >
                           {entry.ticker}
                         </a>
                       ) : (
-                        <span className="font-medium text-slate-300">No ticker</span>
+                        <span className="font-medium text-foreground/80">No ticker</span>
                       )}
                       {entry.skipped_month ? (
-                        <Badge variant="outline" className="border-yellow-700 text-yellow-500 text-xs">
+                        <Badge variant="outline" className="border-warning/50 text-warning text-xs">
                           SKIPPED MONTH
                         </Badge>
                       ) : (
@@ -123,27 +134,27 @@ export default function JournalPage() {
                         </span>
                       )}
                       {entry.bucket && (
-                        <span className="text-xs text-slate-600">{bucketLabel(entry.bucket)}</span>
+                        <span className="text-xs text-muted-foreground">{bucketLabel(entry.bucket)}</span>
                       )}
-                      <span className="text-xs text-slate-600">{fmtDate(entry.action_date)}</span>
+                      <span className="text-xs text-muted-foreground">{fmtDate(entry.action_date)}</span>
                     </div>
                     <button
                       onClick={() => (editId === entry.id ? setEditId(null) : startEdit(entry))}
-                      className="text-xs text-slate-600 hover:text-slate-400 shrink-0"
+                      className="text-xs text-muted-foreground hover:text-foreground shrink-0 cursor-pointer transition-colors"
                     >
                       {editId === entry.id ? "Cancel" : "Edit"}
                     </button>
                   </div>
 
                   {entry.thesis && (
-                    <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{entry.thesis}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">{entry.thesis}</p>
                   )}
 
-                  <div className="flex items-center gap-4 mt-2 text-xs text-slate-600 flex-wrap">
+                  <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground flex-wrap">
                     {entry.suggested_price != null && (
                       <span>
                         Suggested:{" "}
-                        <span className="font-mono text-slate-500">
+                        <span className="font-mono text-foreground/60">
                           {fmtNum(entry.suggested_price, 2)}
                         </span>
                       </span>
@@ -151,46 +162,46 @@ export default function JournalPage() {
                     {entry.fill_price != null && (
                       <span>
                         Fill:{" "}
-                        <span className="font-mono text-slate-400">{fmtNum(entry.fill_price, 2)}</span>
+                        <span className="font-mono text-foreground/70">{fmtNum(entry.fill_price, 2)}</span>
                       </span>
                     )}
                     {entry.qty != null && (
                       <span>
-                        Qty: <span className="font-mono text-slate-400">{entry.qty}</span>
+                        Qty: <span className="font-mono text-foreground/70">{entry.qty}</span>
                       </span>
                     )}
                   </div>
 
                   {entry.notes && (
-                    <p className="text-xs text-slate-500 mt-1.5 italic">{entry.notes}</p>
+                    <p className="text-xs text-muted-foreground mt-1.5 italic">{entry.notes}</p>
                   )}
                   {entry.lesson && (
-                    <p className="text-xs text-indigo-400 mt-1 italic">&ldquo;{entry.lesson}&rdquo;</p>
+                    <p className="text-xs text-primary mt-1 italic">&ldquo;{entry.lesson}&rdquo;</p>
                   )}
 
                   {editId === entry.id && (
-                    <div className="mt-3 space-y-2 border-t border-slate-800 pt-3">
+                    <div className="mt-3 space-y-2 border-t border-border pt-3 animate-scale-in">
                       <div className="flex items-center gap-3">
-                        <label className="text-xs text-slate-500 w-20 shrink-0">Fill price</label>
+                        <label className="text-xs text-muted-foreground w-20 shrink-0">Fill price</label>
                         <input
                           type="number"
                           value={editFill}
                           onChange={(event) => setEditFill(event.target.value)}
-                          className="h-7 w-32 rounded bg-slate-800 border border-slate-700 text-slate-100 text-xs px-2 font-mono"
+                          className="h-7 w-32 rounded bg-muted border border-border text-foreground text-xs px-2 font-mono focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                         />
                       </div>
                       <div className="flex items-start gap-3">
-                        <label className="text-xs text-slate-500 w-20 shrink-0 mt-1">Notes</label>
+                        <label className="text-xs text-muted-foreground w-20 shrink-0 mt-1">Notes</label>
                         <textarea
                           value={editNotes}
                           onChange={(event) => setEditNotes(event.target.value)}
                           rows={2}
-                          className="flex-1 rounded bg-slate-800 border border-slate-700 text-slate-100 text-xs px-2 py-1 resize-none"
+                          className="flex-1 rounded bg-muted border border-border text-foreground text-xs px-2 py-1 resize-none focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                         />
                       </div>
                       {isExit && (
                         <div className="flex items-start gap-3">
-                          <label className="text-xs text-indigo-400 w-20 shrink-0 mt-1">
+                          <label className="text-xs text-primary w-20 shrink-0 mt-1">
                             Lesson
                           </label>
                           <textarea
@@ -198,15 +209,15 @@ export default function JournalPage() {
                             onChange={(event) => setEditLesson(event.target.value)}
                             rows={2}
                             placeholder="Required for exits."
-                            className="flex-1 rounded bg-slate-800 border border-indigo-800 text-slate-100 text-xs px-2 py-1 resize-none"
+                            className="flex-1 rounded bg-muted border border-primary/30 text-foreground text-xs px-2 py-1 resize-none focus:outline-none focus:ring-1 focus:ring-primary transition-shadow"
                           />
                         </div>
                       )}
-                      {error && <p className="text-xs text-red-400">{error}</p>}
+                      {error && <p className="text-xs text-negative">{error}</p>}
                       <div className="flex justify-end">
                         <button
                           onClick={() => handleSave(entry)}
-                          className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded"
+                          className="text-xs bg-primary text-primary-foreground hover:bg-primary/90 px-3 py-1 rounded btn-scale cursor-pointer transition-colors"
                         >
                           Save
                         </button>
@@ -221,12 +232,12 @@ export default function JournalPage() {
 
         <TabsContent value="review" className="mt-4 space-y-4">
           {reviews.length === 0 ? (
-            <p className="text-slate-600 text-sm">No review data yet.</p>
+            <p className="text-muted-foreground text-sm">No review data yet.</p>
           ) : (
-            reviews.map((review) => (
-              <Card key={review.month} className="bg-slate-900 border-slate-800">
+            reviews.map((review, i) => (
+              <Card key={review.month} className="bg-card border-border animate-fade-in-up" style={{ animationDelay: `${i * 80}ms` }}>
                 <CardHeader className="px-4 pt-4 pb-2">
-                  <CardTitle className="text-sm text-slate-100">{review.month}</CardTitle>
+                  <CardTitle className="text-sm text-foreground">{review.month}</CardTitle>
                 </CardHeader>
                 <CardContent className="px-4 pb-4">
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -261,9 +272,9 @@ export default function JournalPage() {
                       },
                       { label: "Lessons Logged", value: String(review.lessons_logged) },
                     ].map(({ label, value }) => (
-                      <div key={label} className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3">
-                        <p className="text-xs text-slate-500">{label}</p>
-                        <p className="text-sm font-mono text-slate-100 mt-1">{value}</p>
+                      <div key={label} className="rounded-lg border border-border bg-muted/30 px-3 py-3 card-hover">
+                        <p className="text-xs text-muted-foreground">{label}</p>
+                        <p className="text-sm font-mono text-foreground mt-1">{value}</p>
                       </div>
                     ))}
                   </div>

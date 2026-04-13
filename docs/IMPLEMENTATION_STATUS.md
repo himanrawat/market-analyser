@@ -1,6 +1,9 @@
 # Implementation Status
 
-This document maps the current codebase to the product requirements in [PRD.md](../PRD.md).
+This document maps the current codebase to the product requirements in [PRD.md](./PRD.md).
+
+For the planned India-only source migration away from FMP, see [INDIA_DATA_LANE_IMPLEMENTATION.md](./INDIA_DATA_LANE_IMPLEMENTATION.md).
+For the full docs index, see [README.md](./README.md).
 
 ## Summary
 
@@ -14,6 +17,22 @@ The repo now ships as a working single-user full-stack application with:
 - live FMP-backed stock-detail enrichment where available
 - hybrid India fundamentals routing support via official-source imports plus vendor merge/fallback
 - automated tests and production frontend build verification
+
+## Current Priority
+
+**Phase 1 — India market only.** The application is intentionally scoped to the Indian market for this phase:
+- finish the India official-source ingestion path
+- remove India-specific dependence on FMP
+- reduce India dependence on Yahoo to last-resort fallback only
+
+**US market is fully detached in Phase 1.** The US code exists and is correct, but it is deliberately not running:
+- `DEFAULT_INDEXES` in the pipeline is `[NIFTY_500]` only
+- US macro indicators (`US_VIX`, `SP_500`, `FEDFUNDS`, `US_10Y`, `US_CPI_YOY`) are not fetched; snapshot fields written as `None`
+- Macro regime uses Nifty 50 vs its 200 DMA only (no S&P 500 check)
+- Dashboard US VIX card, Fed Funds Rate, and US CPI YoY are commented out of the frontend
+- "US only" ranked-list filter is commented out of the frontend
+
+See [US_MARKET_STATUS.md](./US_MARKET_STATUS.md) for the full detach map and instructions to re-enable in Phase 2.
 
 ## Phase Status
 

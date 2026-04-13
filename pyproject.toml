@@ -57,5 +57,9 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["live: requires real network and API keys (deselected by default)"]
+markers = [
+    "india: India-specific test coverage",
+    "us: US-specific test coverage",
+    "live: requires real network and API keys (deselected by default)",
+]
 addopts = "-m 'not live'"

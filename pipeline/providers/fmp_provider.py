@@ -33,7 +33,12 @@ from pipeline.providers.dto import (
     QuarterlyEstimate,
     StockProfile,
 )
-from pipeline.providers.errors import MissingApiKeyError, PlanLimitError, SymbolNotFoundError
+from pipeline.providers.errors import (
+    DataProviderError,
+    MissingApiKeyError,
+    PlanLimitError,
+    SymbolNotFoundError,
+)
 
 PROVIDER_NAME = "fmp"
 BASE_STABLE = "https://financialmodelingprep.com/stable"
@@ -47,8 +52,10 @@ TTL_PEERS = timedelta(days=7)
 
 
 def _fmp_symbol(ticker: str, country: Country) -> str:
-    if country == Country.INDIA and not ticker.endswith((".NS", ".BO")):
-        return f"{ticker}.NS"
+    if country != Country.US:
+        raise DataProviderError(
+            "FMP is now restricted to the US lane in this repository."
+        )
     return ticker
 
 
@@ -523,13 +530,13 @@ def _ratio_kwargs(
 
 def _build_snapshot(
     ticker: str,
-    country: "Country",
+    country: Country,
     index: int,
     fiscal_str: str,
     parts: dict[str, Any],
     ttm_ratios: dict[str, Any],
     ttm_km: dict[str, Any],
-) -> "FundamentalSnapshot | None":
+) -> FundamentalSnapshot | None:
     """Assemble a FundamentalSnapshot from merged statement parts + TTM dicts."""
     fiscal_date = _parse_date(fiscal_str)
     if fiscal_date is None:

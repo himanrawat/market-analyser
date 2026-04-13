@@ -114,6 +114,7 @@ def _build_ranked_stock(
     # Reconstruct ScoreOutput for reason formatting
     so = ScoreOutput(
         ticker=stock.ticker,
+        country=country,
         bucket=bucket,
         score=score_row.score,
         qualified=score_row.qualified,

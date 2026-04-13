@@ -27,15 +27,18 @@ from pipeline.db.models import (
     Event,
     Fundamental,
     Holding,
-    NewsItem as NewsItemModel,
     Price,
     RebalanceSnapshot,
     Score,
     Stock,
 )
+from pipeline.db.models import (
+    NewsItem as NewsItemModel,
+)
 from pipeline.portfolio.diff import _format_reason
 from pipeline.providers.errors import MissingApiKeyError, PlanLimitError, SymbolNotFoundError
-from pipeline.providers.fmp_provider import FMPProvider
+from pipeline.providers.registry import get_data_provider
+from pipeline.providers.us_market_provider import USMarketProvider
 from pipeline.scoring.base import ScoreOutput
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
@@ -119,6 +122,7 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
             factor_scores=s.factor_scores or {},
             reason=_format_reason(ScoreOutput(
                 ticker=stock.ticker,
+                country=Country(stock.country),
                 bucket=Bucket(s.bucket),
                 score=s.score,
                 qualified=s.qualified,
@@ -133,20 +137,21 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
     best_score = max(score_rows, key=lambda s: s.score) if score_rows else None
     plain_reason = _format_reason(ScoreOutput(
         ticker=stock.ticker,
+        country=Country(stock.country),
         bucket=Bucket(best_score.bucket) if best_score else Bucket.QUALITY_MOMENTUM,
         score=best_score.score if best_score else 0.0,
         qualified=best_score.qualified if best_score else False,
         factor_scores=best_score.factor_scores if best_score else {},
     )) if best_score else f"No score data for {ticker}."
 
-    provider = FMPProvider()
-    live_news = _load_live_news(provider, stock)
+    data_provider = get_data_provider()
+    live_news = _load_live_news(data_provider, stock)
     news_items = _merge_news(news_rows, live_news)
     sentiment = _compute_sentiment(news_rows)
-    live_events = _load_live_events(provider, stock)
+    live_events = _load_live_events(data_provider, stock)
     events = _merge_events(event_rows, live_events)
-    forecasts = _load_forecasts(provider, stock, current_price)
-    peers, peers_note = _build_peers(provider, stock, snapshot.id if snapshot else None, db)
+    forecasts = _load_forecasts(stock, current_price)
+    peers, peers_note = _build_peers(stock, snapshot.id if snapshot else None, db)
 
     return StockDetailResponse(
         ticker=stock.ticker,
@@ -156,6 +161,10 @@ def get_stock_detail(ticker: str, db: Session = Depends(get_db)) -> StockDetailR
         description=stock.description,
         market_cap=stock.market_cap,
         current_price=current_price,
+        isin=stock.isin,
+        nse_symbol=stock.nse_symbol,
+        bse_symbol=stock.bse_symbol,
+        bse_scripcode=stock.bse_scripcode,
         fundamentals=FundamentalData(
             revenue=fund_row.revenue,
             net_income=fund_row.net_income,
@@ -252,11 +261,29 @@ def _build_holding_detail(
 
 
 def _load_forecasts(
-    provider: FMPProvider,
     stock: Stock,
     current_price: float | None,
 ) -> AnalystForecast | None:
     country = Country(stock.country)
+    if country == Country.INDIA:
+        return AnalystForecast(
+            analyst_count=None,
+            buy_count=None,
+            hold_count=None,
+            sell_count=None,
+            target_high=None,
+            target_low=None,
+            target_avg=None,
+            current_price=current_price,
+            availability="official_lane_only",
+            note=(
+                "India analyst forecasts are disabled until an official-source India lane "
+                "exists for them. The India stock detail page no longer uses FMP here."
+            ),
+            quarterly_estimates=[],
+        )
+
+    provider = USMarketProvider()
     try:
         forecast = provider.get_analyst_forecast(
             stock.ticker,
@@ -362,25 +389,31 @@ def _load_forecasts(
 
 
 def _build_peers(
-    provider: FMPProvider,
     stock: Stock,
     snapshot_id: int | None,
     db: Session,
 ) -> tuple[list[PeerStock], str | None]:
     notes: list[str] = []
     peer_tickers: list[str] = []
+    country = Country(stock.country)
 
-    try:
-        peer_tickers = provider.get_stock_peers(stock.ticker, Country(stock.country))
-    except MissingApiKeyError:
-        notes.append("Set FMP_API_KEY to load provider-backed peers.")
-    except PlanLimitError:
-        notes.append("Using local same-sector peers because the current FMP plan does not expose peer lookup.")
-    except SymbolNotFoundError:
-        notes.append(f"No provider-backed peers were returned for {stock.ticker}; using local same-sector peers.")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"Peer load failed for {stock.ticker}: {exc}")
-        notes.append("Using local same-sector peers because provider lookup failed.")
+    if country == Country.US:
+        provider = USMarketProvider()
+        try:
+            peer_tickers = provider.get_stock_peers(stock.ticker, country)
+        except MissingApiKeyError:
+            notes.append("Set FMP_API_KEY to load provider-backed peers.")
+        except PlanLimitError:
+            notes.append("Using local same-sector peers because the current FMP plan does not expose peer lookup.")
+        except SymbolNotFoundError:
+            notes.append(f"No provider-backed peers were returned for {stock.ticker}; using local same-sector peers.")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Peer load failed for {stock.ticker}: {exc}")
+            notes.append("Using local same-sector peers because provider lookup failed.")
+    else:
+        notes.append(
+            "Showing local same-sector India peers only; official exchange peer mapping is not implemented yet."
+        )
 
     if peer_tickers:
         local_rows = db.execute(
@@ -397,7 +430,7 @@ def _build_peers(
                 peers.append(_peer_to_schema(peer, snapshot_id, db))
                 continue
 
-            remote_peer = _build_remote_peer(provider, ticker, Country(stock.country))
+            remote_peer = _build_remote_peer(provider, ticker, country)
             if remote_peer is not None:
                 peers.append(remote_peer)
 
@@ -450,7 +483,7 @@ def _peer_to_schema(peer: Stock, snapshot_id: int | None, db: Session) -> PeerSt
 
 
 def _build_remote_peer(
-    provider: FMPProvider,
+    provider: USMarketProvider,
     ticker: str,
     country: Country,
 ) -> PeerStock | None:
@@ -497,9 +530,9 @@ def _growth_rate_from_snapshots(fundamentals) -> float | None:
     return ((latest - prior) / abs(prior)) * 100.0
 
 
-def _load_live_events(provider: FMPProvider, stock: Stock) -> list:
+def _load_live_events(provider, stock: Stock) -> list:
     try:
-        return provider.get_upcoming_events(stock.ticker, Country(stock.country), within_days=120)
+        return provider.events.get_upcoming_events(stock.ticker, Country(stock.country), within_days=120)
     except (MissingApiKeyError, PlanLimitError, SymbolNotFoundError):
         return []
     except Exception as exc:  # noqa: BLE001
@@ -507,13 +540,12 @@ def _load_live_events(provider: FMPProvider, stock: Stock) -> list:
         return []
 
 
-def _load_live_news(provider: FMPProvider, stock: Stock):
+def _load_live_news(provider, stock: Stock):
     try:
-        return provider.get_stock_news(
+        return provider.news.get_stock_news(
             stock.ticker,
             Country(stock.country),
             since=datetime.utcnow() - timedelta(days=30),
-            limit=20,
         )
     except (MissingApiKeyError, PlanLimitError, SymbolNotFoundError):
         return []

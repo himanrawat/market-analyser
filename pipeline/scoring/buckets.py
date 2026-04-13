@@ -12,22 +12,28 @@ from __future__ import annotations
 
 from pipeline.db.enums import Bucket, Country
 from pipeline.scoring.base import (
-    BucketScorer,
     ScoreOutput,
     StockData,
     compute_cagr,
     scale,
     score_above_dma,
+    score_bank_asset_quality,
     score_cagr,
     score_debt_equity,
+    score_delivery_pct,
     score_distance_from_high,
     score_dma_crossover,
     score_earnings_beat,
     score_fcf,
+    score_fii_trend,
+    score_nim,
+    score_pcr,
     score_pe_vs_own_history,
     score_pe_vs_sector,
-    score_rsi,
+    score_promoter_holding_stable,
+    score_promoter_pledge,
     score_roe,
+    score_rsi,
     score_sales_growth,
     score_volume_trend,
 )
@@ -46,6 +52,12 @@ _DEFAULT_QV = {
     "pe_vs_own_5yr_median": 10,
     "dividend_yield": 5,
     "promoter_holding_stable": 5,
+    # India-only factors (applied when country == INDIA; weight taken from bucket total)
+    "promoter_pledge": 5,
+    "fii_trend": 5,
+    "delivery_pct": 5,
+    "bank_asset_quality": 5,   # banks/NBFCs only
+    "bank_nim": 5,             # banks/NBFCs only
 }
 
 _DEFAULT_MOM = {
@@ -57,6 +69,9 @@ _DEFAULT_MOM = {
     "earnings_beat": 10,
     "sales_growth_latest_qtr": 15,
     "rsi_14": 10,
+    # India-only overlays
+    "delivery_pct": 5,
+    "pcr_signal": 5,
 }
 
 _DEFAULT_QM = {
@@ -126,6 +141,25 @@ def _compute_qv_factors(inp: dict, data: StockData, w: dict) -> dict[str, float]
     fs["promoter_holding_stable"] = _score_promoter(
         inp["promoter"], data.fundamentals, w.get("promoter_holding_stable", 0), data.country
     )
+    # India-specific overlay factors
+    if data.country == Country.INDIA:
+        fs["promoter_pledge"] = score_promoter_pledge(
+            data.promoter_pledge_pct, w.get("promoter_pledge", 0)
+        )
+        fs["fii_trend"] = score_fii_trend(
+            data.fundamentals, w.get("fii_trend", 0)
+        )
+        fs["delivery_pct"] = score_delivery_pct(
+            data.delivery_pct, w.get("delivery_pct", 0)
+        )
+        if _is_financial_sector(data.sector):
+            latest = data.fundamentals[0] if data.fundamentals else {}
+            fs["bank_asset_quality"] = score_bank_asset_quality(
+                latest.get("gnpa_pct"), w.get("bank_asset_quality", 0)
+            )
+            fs["bank_nim"] = score_nim(
+                latest.get("nim_pct"), w.get("bank_nim", 0)
+            )
     return fs
 
 
@@ -155,6 +189,7 @@ class QualityValueScorer:
 
         return ScoreOutput(
             ticker=data.ticker,
+            country=data.country,
             bucket=self.bucket,
             score=max(0.0, raw_score),
             qualified=len(dq) == 0,
@@ -196,6 +231,13 @@ class MomentumScorer:
         )
         fs["rsi_14"] = score_rsi(data.rsi_14, w.get("rsi_14", 0))
 
+        # India-specific momentum overlays
+        if data.country == Country.INDIA:
+            fs["delivery_pct"] = score_delivery_pct(
+                data.delivery_pct, w.get("delivery_pct", 0)
+            )
+            fs["pcr_signal"] = score_pcr(data.put_call_ratio, w.get("pcr_signal", 0))
+
         raw_score = sum(fs.values())
 
         # --- Disqualifiers (F-3.2) ---
@@ -209,6 +251,7 @@ class MomentumScorer:
 
         return ScoreOutput(
             ticker=data.ticker,
+            country=data.country,
             bucket=self.bucket,
             score=max(0.0, raw_score),
             qualified=len(dq) == 0,
@@ -287,6 +330,7 @@ class QualityMomentumScorer:
 
         return ScoreOutput(
             ticker=data.ticker,
+            country=data.country,
             bucket=self.bucket,
             score=max(0.0, raw_score),
             qualified=len(dq) == 0,
@@ -368,6 +412,7 @@ class DividendGrowthScorer:
 
         return ScoreOutput(
             ticker=data.ticker,
+            country=data.country,
             bucket=self.bucket,
             score=max(0.0, raw_score),
             qualified=len(dq) == 0,
@@ -443,10 +488,10 @@ def _had_dividend_cut(div_per_shares: list[float]) -> bool:
     """True if any quarter had a lower dividend than the same quarter 1yr ago."""
     if len(div_per_shares) < 8:
         return False
-    for i in range(4):
-        if div_per_shares[i] < div_per_shares[i + 4] * 0.95:  # 5% tolerance
-            return True
-    return False
+    return any(
+        div_per_shares[i] < div_per_shares[i + 4] * 0.95
+        for i in range(4)
+    )
 
 
 def _fcf_covers_dividend(

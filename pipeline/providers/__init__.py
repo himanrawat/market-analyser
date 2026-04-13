@@ -20,12 +20,15 @@ from pipeline.providers.errors import (
     ProviderUnavailableError,
     SymbolNotFoundError,
 )
+from pipeline.providers.india_market_provider import IndiaMarketProvider
 from pipeline.providers.registry import DataProvider, get_data_provider
+from pipeline.providers.us_market_provider import USMarketProvider
 
 __all__ = [
     "DataProvider",
     "DataProviderError",
     "EventRecord",
+    "IndiaMarketProvider",
     "FundamentalSnapshot",
     "MacroReading",
     "MissingApiKeyError",
@@ -35,6 +38,7 @@ __all__ = [
     "ProviderUnavailableError",
     "StockProfile",
     "SymbolNotFoundError",
+    "USMarketProvider",
     "UniverseConstituent",
     "get_data_provider",
 ]

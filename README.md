@@ -7,7 +7,7 @@ The app combines:
 - A FastAPI backend that serves the SQLite-backed data model.
 - A Next.js frontend for ranked lists, stock detail, portfolio tracking, action execution, journal review, news, and settings.
 
-The product spec lives in [PRD.md](PRD.md).
+The product spec lives in [docs/PRD.md](docs/PRD.md).
 
 ## Current Status
 
@@ -18,8 +18,11 @@ The project is now a working full-stack baseline rather than a Phase 1 stub:
 - The monthly pipeline now persists real rebalance snapshots, so `/api/actions` and `/api/ranked` work after a completed run.
 - FMP-backed stock detail enrichments now include analyst forecasts, EPS estimates, live peers, and richer event/news fallback behavior.
 - Hybrid India fundamentals rollout has started: the backend now has an official-source India lane that can sit in front of vendor fundamentals and merge missing fields from vendor data when needed.
+- Current build priority is India-first. US market enhancement work is intentionally on hold until the Indian market implementation is complete.
 
+All supplemental documentation now lives under [docs/](docs/README.md).
 Implementation details and PRD mapping are documented in [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md).
+The India source-migration plan is documented in [docs/INDIA_DATA_LANE_IMPLEMENTATION.md](docs/INDIA_DATA_LANE_IMPLEMENTATION.md).
 
 ## Core Features
 
@@ -218,6 +221,17 @@ source .venv/bin/activate
 ./.venv/bin/pytest
 ```
 
+### Run grouped backend market tests
+
+```bash
+source .venv/bin/activate
+python -m pipeline.cli test-india
+python -m pipeline.cli test-us
+python -m pipeline.cli test-markets
+```
+
+These keep the existing test files separate and use pytest markers to group India-only and US-only coverage without creating giant merged test files.
+
 ### Build the frontend
 
 ```bash
@@ -253,6 +267,8 @@ docs/                Project documentation and implementation notes
 
 ## Documentation
 
-- [PRD.md](PRD.md)
+- [docs/README.md](docs/README.md)
+- [docs/PRD.md](docs/PRD.md)
 - [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)
-- [frontend/README.md](frontend/README.md)
+- [docs/INDIA_DATA_LANE_IMPLEMENTATION.md](docs/INDIA_DATA_LANE_IMPLEMENTATION.md)
+- [docs/FRONTEND.md](docs/FRONTEND.md)

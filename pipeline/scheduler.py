@@ -6,16 +6,19 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from loguru import logger
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from pipeline.config import settings
 from pipeline.db import init_db
 from pipeline.db.base import get_session
-from pipeline.db.enums import Country, EventType, MacroRegime, NewsCategory, NewsStream
+from pipeline.db.enums import Country, EventType, IndexName, MacroRegime, NewsCategory, NewsStream
 from pipeline.db.models import (
     Event,
     Fundamental,
+    IndiaDerivatives,
+    IndiaMarketBreadth,
     MacroSnapshot,
     NewsItem,
     Price,
@@ -45,6 +48,8 @@ GENERAL_NEWS_DAYS = 30
 EVENT_LOOKAHEAD_DAYS = 120
 MACRO_HISTORY_DAYS = 400
 OFFICIAL_INDIA_BOOTSTRAP_TICKERS = ("RELIANCE", "TCS", "INFY", "ITC", "HINDUNILVR")
+PIPELINE_COUNTRY = Country.INDIA
+PIPELINE_INDEX = IndexName.NIFTY_500
 
 
 @dataclass(frozen=True)
@@ -75,9 +80,15 @@ def run_pipeline(
 
         logger.info("Step 1/9: Refreshing universe...")
         loader = UniverseLoader()
-        loader.refresh()
-        universe_tickers = loader.get_active_tickers()
-        logger.info(f"Active universe loaded: {len(universe_tickers)} stocks")
+        loader.refresh(indexes=[PIPELINE_INDEX])
+        universe_tickers = loader.get_active_tickers(
+            country=PIPELINE_COUNTRY,
+            index=PIPELINE_INDEX,
+        )
+        logger.info(
+            f"Active universe loaded: {len(universe_tickers)} stocks "
+            f"({PIPELINE_COUNTRY.value}, {PIPELINE_INDEX.value})"
+        )
 
         logger.info("Step 2/9: Refreshing official India fundamentals lane...")
         _refresh_official_india_lane(universe_tickers)
@@ -250,25 +261,57 @@ def _official_india_kind_exists(data_dir: Path, ticker: str, kind: str) -> bool:
 
 def _pull_market_data(provider, tickers, as_of: date, macro_context: MacroContext) -> None:
     stock_lookup = _stock_lookup()
+    skipped: list[str] = []
 
-    for idx, (ticker, country) in enumerate(tickers, start=1):
-        stock_id = stock_lookup.get((ticker, str(country)))
-        if stock_id is None:
-            continue
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]Syncing market data[/bold cyan]"),
+        BarColumn(bar_width=40),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        TextColumn("• [yellow]{task.fields[current]}[/yellow]"),
+        refresh_per_second=4,
+    )
 
-        try:
-            _sync_prices(provider, stock_id, ticker, country, as_of)
-            _sync_fundamentals(provider, stock_id, ticker, country)
-            _sync_events(provider, stock_id, ticker, country)
-        except SymbolNotFoundError as exc:
-            logger.warning(f"Data sync skipped for {ticker}: {exc}")
-        except DataProviderError as exc:
-            logger.warning(f"Data sync issue for {ticker}: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"Unexpected data sync error for {ticker}: {exc}")
+    with progress:
+        task = progress.add_task("sync", total=len(tickers), current="")
+        for ticker, country in tickers:
+            progress.update(task, current=ticker)
+            stock_id = stock_lookup.get((ticker, str(country)))
+            if stock_id is None:
+                progress.advance(task)
+                continue
 
-        if idx % 50 == 0:
-            logger.info(f"Synced market data for {idx}/{len(tickers)} stocks")
+            try:
+                _sync_prices(provider, stock_id, ticker, country, as_of)
+                _sync_fundamentals(provider, stock_id, ticker, country)
+                _sync_events(provider, stock_id, ticker, country)
+                if country == Country.INDIA:
+                    _sync_india_stock_data(provider, stock_id, ticker, country, as_of)
+            except SymbolNotFoundError as exc:
+                skipped.append(ticker)
+                logger.warning(f"Data sync skipped for {ticker}: {exc}")
+            except DataProviderError as exc:
+                logger.warning(f"Data sync issue for {ticker}: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Unexpected data sync error for {ticker}: {exc}")
+
+            progress.advance(task)
+
+    logger.info(f"Market data sync complete — {len(tickers)} stocks, {len(skipped)} skipped")
+    if skipped:
+        logger.debug(f"Skipped tickers: {skipped}")
+
+    # India-specific: update F&O ban and ASM/GSM flags on Stock rows
+    india_tickers = [(t, c) for t, c in tickers if c == Country.INDIA]
+    if india_tickers:
+        logger.info("Syncing India market-structure flags (F&O ban / ASM-GSM)...")
+        _sync_india_stock_flags(provider, india_tickers, stock_lookup)
+        logger.info("Syncing India market breadth snapshot...")
+        _sync_india_breadth(provider, as_of)
 
     _sync_general_news(provider, as_of, macro_context)
 
@@ -351,6 +394,18 @@ def _sync_fundamentals(provider, stock_id: int, ticker: str, country) -> None:
             "dividend_yield": snap.dividend_yield,
             "payout_ratio": snap.payout_ratio,
             "promoter_holding": snap.promoter_holding,
+            # India-specific columns
+            "promoter_pledge_pct": snap.promoter_pledge_pct,
+            "fii_holding": snap.fii_holding,
+            "dii_holding": snap.dii_holding,
+            "is_consolidated": snap.is_consolidated,
+            "data_source": snap.data_source,
+            "gnpa_pct": snap.gnpa_pct,
+            "nnpa_pct": snap.nnpa_pct,
+            "nim_pct": snap.nim_pct,
+            "casa_ratio": snap.casa_ratio,
+            "credit_cost": snap.credit_cost,
+            "capital_adequacy_ratio": snap.capital_adequacy_ratio,
         }
         for snap in snapshots
     ]
@@ -381,6 +436,18 @@ def _sync_fundamentals(provider, stock_id: int, ticker: str, country) -> None:
             "dividend_yield": stmt.excluded.dividend_yield,
             "payout_ratio": stmt.excluded.payout_ratio,
             "promoter_holding": stmt.excluded.promoter_holding,
+            # India-specific columns
+            "promoter_pledge_pct": stmt.excluded.promoter_pledge_pct,
+            "fii_holding": stmt.excluded.fii_holding,
+            "dii_holding": stmt.excluded.dii_holding,
+            "is_consolidated": stmt.excluded.is_consolidated,
+            "data_source": stmt.excluded.data_source,
+            "gnpa_pct": stmt.excluded.gnpa_pct,
+            "nnpa_pct": stmt.excluded.nnpa_pct,
+            "nim_pct": stmt.excluded.nim_pct,
+            "casa_ratio": stmt.excluded.casa_ratio,
+            "credit_cost": stmt.excluded.credit_cost,
+            "capital_adequacy_ratio": stmt.excluded.capital_adequacy_ratio,
         },
     )
     with get_session() as session:
@@ -467,35 +534,39 @@ def _sync_general_news(provider, as_of: date, macro_context: MacroContext) -> No
 def _pull_macro_snapshot(provider, as_of: date) -> MacroContext:
     start = as_of - timedelta(days=MACRO_HISTORY_DAYS)
 
-    us_vix_series = _safe_macro_series(provider, "US_VIX", start, as_of)
+    # Phase 1: India market only — US macro indicators (US_VIX, SP_500, FEDFUNDS,
+    # US_CPI_YOY, US_10Y) are not fetched. They will be re-enabled in Phase 2.
     india_vix_series = _safe_macro_series(provider, "INDIA_VIX", start, as_of)
     nifty_series = _safe_macro_series(provider, "NIFTY_50", start, as_of)
-    sp_series = _safe_macro_series(provider, "SP_500", start, as_of)
     usd_inr_series = _safe_macro_series(provider, "USD_INR", start, as_of)
     brent_series = _safe_macro_series(provider, "BRENT_OIL", start, as_of)
-    us_10y_series = _safe_macro_series(provider, "US_10Y", start, as_of)
-    fed_series = _safe_macro_series(provider, "FEDFUNDS", start, as_of)
-    us_cpi_series = _safe_macro_series(provider, "US_CPI_YOY", start, as_of)
     india_repo_series = _safe_macro_series(provider, "INDIA_REPO_RATE", start, as_of)
     india_cpi_series = _safe_macro_series(provider, "INDIA_CPI_YOY", start, as_of)
 
+    # US indicators — not fetched in Phase 1 (India-only mode)
+    # us_vix_series = _safe_macro_series(provider, "US_VIX", start, as_of)
+    # sp_series = _safe_macro_series(provider, "SP_500", start, as_of)
+    # us_10y_series = _safe_macro_series(provider, "US_10Y", start, as_of)
+    # fed_series = _safe_macro_series(provider, "FEDFUNDS", start, as_of)
+    # us_cpi_series = _safe_macro_series(provider, "US_CPI_YOY", start, as_of)
+
     snapshot_values = {
         "date": as_of,
-        "fed_funds_rate": _latest_value(fed_series),
+        "fed_funds_rate": None,          # Phase 2 (US market)
         "rbi_repo_rate": _latest_value(india_repo_series),
-        "us_10y_yield": _latest_value(us_10y_series),
+        "us_10y_yield": None,            # Phase 2 (US market)
         "india_10y_yield": None,
-        "us_cpi_yoy": _compute_yoy(us_cpi_series),
+        "us_cpi_yoy": None,              # Phase 2 (US market)
         "india_cpi_yoy": _compute_yoy(india_cpi_series),
         "usd_inr": _latest_value(usd_inr_series),
         "india_vix": _latest_value(india_vix_series),
-        "us_vix": _latest_value(us_vix_series),
+        "us_vix": None,                  # Phase 2 (US market)
         "brent_oil": _latest_value(brent_series),
         "gold": None,
         "nifty_50_close": _latest_value(nifty_series),
         "nifty_50_200dma": _rolling_average(nifty_series, 200),
-        "sp_500_close": _latest_value(sp_series),
-        "sp_500_200dma": _rolling_average(sp_series, 200),
+        "sp_500_close": None,            # Phase 2 (US market)
+        "sp_500_200dma": None,           # Phase 2 (US market)
     }
 
     stmt = sqlite_insert(MacroSnapshot).values(snapshot_values)
@@ -509,8 +580,8 @@ def _pull_macro_snapshot(provider, as_of: date) -> MacroContext:
     return MacroContext(
         india_vix=_latest_value(india_vix_series),
         india_vix_prev=_previous_value(india_vix_series),
-        us_vix=_latest_value(us_vix_series),
-        us_vix_prev=_previous_value(us_vix_series),
+        us_vix=None,    # Phase 2 (US market)
+        us_vix_prev=None,  # Phase 2 (US market)
     )
 
 
@@ -576,6 +647,242 @@ def _persist_snapshot(
                         snapshot_data=None,
                     )
                 )
+
+
+def _sync_india_stock_data(
+    provider, stock_id: int, ticker: str, country, as_of: date
+) -> None:
+    """Sync bulk deals, insider trades, market depth, and derivatives for one India stock."""
+    from pipeline.db.models import IndiaBulkDeal, IndiaInsiderTrade, IndiaMarketDepth, IndiaDerivatives
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # Bulk deals (last 30 days)
+    try:
+        deals = provider.india.get_bulk_deals(ticker, country, limit=50)
+        if deals:
+            rows = [
+                IndiaBulkDeal(
+                    stock_id=stock_id,
+                    deal_type=d.deal_type,
+                    trade_date=d.trade_date,
+                    client_name=d.client_name,
+                    transaction_type=d.transaction_type,
+                    quantity=d.quantity,
+                    trade_price=d.trade_price,
+                    source=d.source or "NSE",
+                )
+                for d in deals
+            ]
+            with get_session() as session:
+                # Delete existing records for this stock in the last 90 days to avoid duplicates
+                cutoff = as_of - timedelta(days=90)
+                session.execute(
+                    delete(IndiaBulkDeal).where(
+                        IndiaBulkDeal.stock_id == stock_id,
+                        IndiaBulkDeal.trade_date >= cutoff,
+                    )
+                )
+                session.add_all(rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Bulk deals unavailable for {ticker}: {exc}")
+
+    # Insider trades (last 90 days)
+    try:
+        trades = provider.india.get_insider_trades(ticker, country, limit=50)
+        if trades:
+            rows = [
+                IndiaInsiderTrade(
+                    stock_id=stock_id,
+                    person_name=t.person_name,
+                    person_category=t.person_category,
+                    transaction_type=t.transaction_type,
+                    trade_date=t.trade_date,
+                    from_date=t.from_date,
+                    to_date=t.to_date,
+                    shares_traded=t.shares_traded,
+                    trade_price=t.trade_price,
+                    post_trade_pct=t.post_trade_pct,
+                    source=t.source or "NSE",
+                )
+                for t in trades
+            ]
+            with get_session() as session:
+                cutoff = as_of - timedelta(days=180)
+                session.execute(
+                    delete(IndiaInsiderTrade).where(
+                        IndiaInsiderTrade.stock_id == stock_id,
+                        IndiaInsiderTrade.trade_date >= cutoff,
+                    )
+                )
+                session.add_all(rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Insider trades unavailable for {ticker}: {exc}")
+
+    # Market depth snapshot (live — only useful during market hours)
+    try:
+        depth = provider.india.get_market_depth(ticker, country)
+        if depth is not None:
+            buy_levels = [
+                {"price": lvl.price, "qty": lvl.quantity, "orders": lvl.orders}
+                for lvl in (depth.buy_depth or [])
+            ]
+            sell_levels = [
+                {"price": lvl.price, "qty": lvl.quantity, "orders": lvl.orders}
+                for lvl in (depth.sell_depth or [])
+            ]
+            row = IndiaMarketDepth(
+                stock_id=stock_id,
+                snapshot_at=now,
+                buy_depth=buy_levels,
+                sell_depth=sell_levels,
+                total_buy_qty=depth.total_buy_qty,
+                total_sell_qty=depth.total_sell_qty,
+                source=depth.source or "NSE",
+            )
+            with get_session() as session:
+                session.add(row)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Market depth unavailable for {ticker}: {exc}")
+
+    # Derivatives / F&O sentiment
+    try:
+        deriv = provider.india.get_derivatives_sentiment(ticker, country)
+        if deriv is not None:
+            row_data = {
+                "stock_id": stock_id,
+                "as_of": as_of,
+                "oi_futures": deriv.oi_futures,
+                "oi_futures_change": deriv.oi_futures_change,
+                "oi_call_total": deriv.oi_call_total,
+                "oi_put_total": deriv.oi_put_total,
+                "put_call_ratio": deriv.put_call_ratio,
+                "max_pain_strike": deriv.max_pain_strike,
+                "atm_iv": deriv.atm_iv,
+                "top_call_oi_strike": deriv.top_call_oi_strike,
+                "top_put_oi_strike": deriv.top_put_oi_strike,
+                "source": deriv.source or "NSE",
+            }
+            stmt = sqlite_insert(IndiaDerivatives).values(row_data)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["stock_id", "as_of"],
+                set_={k: stmt.excluded[k] for k in row_data if k not in ("stock_id", "as_of")},
+            )
+            with get_session() as session:
+                session.execute(stmt)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Derivatives sentiment unavailable for {ticker}: {exc}")
+
+
+def _extract_symbols_from_nse_response(data, *key_candidates: str) -> set[str]:
+    """Pull symbol strings from a variety of NSE payload shapes."""
+    if isinstance(data, dict):
+        records = data.get("data") or data.get("secBanList") or []
+    elif isinstance(data, list):
+        records = data
+    else:
+        return set()
+    symbols: set[str] = set()
+    for rec in records:
+        sym = next(
+            (rec.get(k) for k in key_candidates if rec.get(k)),
+            None,
+        )
+        if sym:
+            symbols.add(sym.upper())
+    return symbols
+
+
+def _sync_india_stock_flags(
+    provider,
+    india_tickers: list[tuple[str, Country]],
+    stock_lookup: dict[tuple[str, str], int],
+) -> None:
+    """Update in_fno_ban and in_asm_gsm flags on Stock rows from live NSE data."""
+    india_market = getattr(provider.india, "_india", None)
+    if india_market is None:
+        logger.debug("IndiaMarketProvider not accessible — skipping flag sync")
+        return
+
+    nse_client = getattr(india_market, "_nse", None)
+    if nse_client is None:
+        logger.debug("NSE client not accessible — skipping flag sync")
+        return
+
+    fno_banned: set[str] = set()
+    asm_gsm: set[str] = set()
+
+    try:
+        fno_banned = _extract_symbols_from_nse_response(
+            nse_client.get_fno_ban_list(), "symbol", "Symbol", "scrip"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"F&O ban list fetch failed: {exc}")
+
+    try:
+        asm_gsm = _extract_symbols_from_nse_response(
+            nse_client.get_asm_list(), "symbol", "Symbol"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"ASM/GSM list fetch failed: {exc}")
+
+    if not fno_banned and not asm_gsm:
+        return
+
+    with get_session() as session:
+        for ticker, _ in india_tickers:
+            stock_id = stock_lookup.get((ticker, str(Country.INDIA)))
+            if stock_id is None:
+                continue
+            session.execute(
+                Stock.__table__.update()
+                .where(Stock.id == stock_id)
+                .values(
+                    in_fno_ban=ticker.upper() in fno_banned,
+                    in_asm_gsm=ticker.upper() in asm_gsm,
+                )
+            )
+
+
+def _sync_india_breadth(provider, as_of: date) -> None:
+    """Persist one IndiaMarketBreadth row for today from NSE breadth data."""
+    try:
+        breadth = provider.india.get_market_breadth()
+        if breadth is None:
+            return
+
+        row_data = {
+            "as_of": as_of,
+            "advances": breadth.advances,
+            "declines": breadth.declines,
+            "unchanged": breadth.unchanged,
+            "advance_decline_ratio": breadth.advance_decline_ratio,
+            "india_vix": breadth.india_vix,
+            "india_vix_change_pct": breadth.india_vix_change_pct,
+            "nifty_50": breadth.nifty_50,
+            "nifty_50_change_pct": breadth.nifty_50_change_pct,
+            "sensex": breadth.sensex,
+            "sensex_change_pct": breadth.sensex_change_pct,
+            "nifty_bank": breadth.nifty_bank,
+            "nifty_it": breadth.nifty_it,
+            "nifty_fmcg": breadth.nifty_fmcg,
+            "nifty_auto": breadth.nifty_auto,
+            "nifty_pharma": breadth.nifty_pharma,
+            "nifty_realty": breadth.nifty_realty,
+            "nifty_metal": breadth.nifty_metal,
+            "nifty_energy": breadth.nifty_energy,
+            "source": "NSE",
+        }
+        stmt = sqlite_insert(IndiaMarketBreadth).values(row_data)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["as_of"],
+            set_={k: stmt.excluded[k] for k in row_data if k != "as_of"},
+        )
+        with get_session() as session:
+            session.execute(stmt)
+        logger.debug(f"India market breadth synced for {as_of}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"India breadth sync failed: {exc}")
 
 
 def _stock_lookup() -> dict[tuple[str, str], int]:

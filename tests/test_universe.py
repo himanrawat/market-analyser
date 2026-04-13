@@ -16,6 +16,8 @@ from pipeline.universe.filter import (
 )
 from pipeline.universe.sources import fetch_sp500
 
+pytestmark = pytest.mark.us
+
 
 # ---------------------------------------------------------------------------
 # UniverseFilter — unit tests with in-memory DB
@@ -132,42 +134,45 @@ class TestUniverseFilter:
 # ---------------------------------------------------------------------------
 
 
-def _make_sp500_df():
+def _make_spy_holdings_df():
     import pandas as pd
+
     return pd.DataFrame(
         {
-            "Symbol": ["AAPL", "MSFT", "BRK.B"],
-            "Security": ["Apple Inc.", "Microsoft Corp.", "Berkshire Hathaway B"],
-            "GICS Sector": ["Technology", "Technology", "Financials"],
-            "GICS Sub-Industry": ["Consumer Electronics", "Systems Software", "Insurance"],
+            "ticker": ["AAPL", "MSFT", "BRK.B"],
+            "name": ["Apple Inc.", "Microsoft Corp.", "Berkshire Hathaway B"],
+            "weight": [7.1, 6.8, 1.9],
+            "sector": ["Technology", "Technology", "Financials"],
         }
     )
 
 
 class TestSources:
-    def test_fetch_sp500_normalizes_brk(self, tmp_path):
-        import pandas as pd
-        csv = tmp_path / "sp500_static.csv"
-        csv.write_text("symbol,name,sector,sub_sector\nAAPL,Apple,Technology,Hardware\nBRK-B,Berkshire B,Financials,Insurance\n")
-        with patch("pipeline.universe.sources._SP500_STATIC_CSV", csv):
+    def test_fetch_sp500_uses_spy_holdings_symbols(self):
+        with patch("pipeline.universe.sources._fetch_spy_holdings", return_value=_make_spy_holdings_df()):
             constituents = fetch_sp500()
         tickers = [c.ticker for c in constituents]
-        assert "BRK-B" in tickers
-        assert "BRK.B" not in tickers
+        assert "BRK.B" in tickers
 
-    def test_fetch_sp500_returns_correct_country(self, tmp_path):
-        import pandas as pd
-        csv = tmp_path / "sp500_static.csv"
-        csv.write_text("symbol,name,sector,sub_sector\nAAPL,Apple,Technology,Hardware\nMSFT,Microsoft,Technology,Software\n")
-        with patch("pipeline.universe.sources._SP500_STATIC_CSV", csv):
+    def test_fetch_sp500_returns_correct_country(self):
+        holdings = _make_spy_holdings_df().head(2)
+        with patch("pipeline.universe.sources._fetch_spy_holdings", return_value=holdings):
             constituents = fetch_sp500()
         assert all(c.country == Country.US for c in constituents)
         assert all(c.index_name == IndexName.SP_500 for c in constituents)
 
-    def test_fetch_sp500_skips_empty_tickers(self, tmp_path):
-        csv = tmp_path / "sp500_static.csv"
-        csv.write_text("symbol,name,sector,sub_sector\nAAPL,Apple,Technology,Hardware\n,Ghost,,\n")
-        with patch("pipeline.universe.sources._SP500_STATIC_CSV", csv):
+    def test_fetch_sp500_skips_empty_tickers(self):
+        import pandas as pd
+
+        holdings = pd.DataFrame(
+            {
+                "ticker": ["AAPL", ""],
+                "name": ["Apple Inc.", "Ghost"],
+                "weight": [7.1, 0.0],
+                "sector": ["Technology", None],
+            }
+        )
+        with patch("pipeline.universe.sources._fetch_spy_holdings", return_value=holdings):
             constituents = fetch_sp500()
         assert all(c.ticker for c in constituents)
         assert len(constituents) == 1
